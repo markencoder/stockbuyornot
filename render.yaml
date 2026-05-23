@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: stockbuyornot
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run src/stockbuyornot/ui/streamlit_app.py --server.address=0.0.0.0 --server.port=$PORT --server.headless=true --browser.gatherUsageStats=false
+    disk:
+      name: stockbuyornot-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: STOCKBUYORNOT_DB_PATH
+        value: /opt/render/project/src/data/app.db
+      - key: STOCKBUYORNOT_BILLING_ENFORCED
+        value: "false"
+      - key: STOCKBUYORNOT_PAYMENT_AMOUNT_CNY
+        value: "99"
+      - key: STOCKBUYORNOT_PAYMENT_PROVIDER
+        value: manual_qr
+      - key: STOCKBUYORNOT_PAYMENT_QR_URL
+        value: ""
+      - key: STOCKBUYORNOT_SUPPORT_CONTACT
+        value: ""
