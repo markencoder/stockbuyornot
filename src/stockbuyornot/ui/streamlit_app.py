@@ -15,10 +15,14 @@ from stockbuyornot.auth import (
     User,
     authenticate_user,
     create_user,
+    get_user_by_email,
     get_user_by_id,
     initialize_auth_db,
+    is_admin_user,
+    list_users,
     sanitize_user_key,
     subscription_is_active,
+    update_subscription_status,
 )
 from stockbuyornot.backtest import backtest_single
 from stockbuyornot.data.providers import AkshareProvider, CsvProvider
@@ -167,6 +171,8 @@ def render_account_panel(user: User) -> None:
         "admin": "管理员",
         "expired": "已过期",
     }.get(user.subscription_status, user.subscription_status)
+    if is_admin_user(user):
+        status_label = "管理员"
     st.markdown(f"**{user.display_name}**")
     st.caption(f"{user.email} | {status_label}")
     if user.subscription_expires_at:
@@ -185,6 +191,43 @@ def render_account_panel(user: User) -> None:
         if config.support_contact:
             st.caption(f"付款后联系：{config.support_contact}")
         st.caption("正式接入微信/支付宝后，支付回调只需要把用户 subscription_status 更新为 active。")
+
+
+def render_admin_panel() -> None:
+    status_options = ["free", "trial", "active", "expired", "admin"]
+    with st.expander("管理员后台", expanded=False):
+        st.caption("按邮箱开通、取消或调整会员状态。")
+        with st.form("admin_subscription_form"):
+            email = st.text_input("用户邮箱", key="admin_user_email")
+            status = st.selectbox("会员状态", status_options, index=2, key="admin_status")
+            expires_at = st.text_input("到期时间", value="2026-12-31", help="可留空；建议格式 YYYY-MM-DD")
+            submitted = st.form_submit_button("保存会员状态", type="primary", use_container_width=True)
+        if submitted:
+            target = get_user_by_email(email)
+            if target is None:
+                st.error("没有找到这个用户，请确认邮箱已经注册。")
+            else:
+                update_subscription_status(target.id, status, expires_at.strip() or None)
+                st.success(f"已更新 {target.email} 为 {status}。")
+                if target.id == st.session_state.get("auth_user_id"):
+                    st.rerun()
+
+        users = list_users(limit=30)
+        if users:
+            frame = pd.DataFrame(
+                [
+                    {
+                        "邮箱": item.email,
+                        "昵称": item.display_name,
+                        "状态": "admin" if is_admin_user(item) else item.subscription_status,
+                        "到期时间": item.subscription_expires_at or "",
+                    }
+                    for item in users
+                ]
+            )
+            st.dataframe(frame, use_container_width=True, hide_index=True)
+        else:
+            st.info("暂无注册用户。")
 
 
 def current_user_data_path(filename: str) -> Path:
@@ -209,6 +252,8 @@ def sidebar_settings(user: User | None = None) -> dict:
     with st.sidebar:
         if user is not None:
             render_account_panel(user)
+            if is_admin_user(user):
+                render_admin_panel()
             st.divider()
         st.header("全局参数")
         start = st.text_input("开始日期", value="20240101", help="格式：YYYYMMDD")

@@ -138,6 +138,31 @@ def get_user_by_id(user_id: int, db_path: Path | None = None) -> User | None:
     return _row_to_user(row) if row is not None else None
 
 
+def get_user_by_email(email: str, db_path: Path | None = None) -> User | None:
+    initialize_auth_db(db_path)
+    with connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT * FROM users WHERE email = ?",
+            (normalize_email(email),),
+        ).fetchone()
+    return _row_to_user(row) if row is not None else None
+
+
+def list_users(limit: int = 100, db_path: Path | None = None) -> list[User]:
+    initialize_auth_db(db_path)
+    with connect(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM users
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+    return [_row_to_user(row) for row in rows]
+
+
 def update_subscription_status(
     user_id: int,
     status: str,
@@ -156,8 +181,17 @@ def update_subscription_status(
         )
 
 
+def admin_emails_from_env() -> set[str]:
+    raw = os.environ.get("STOCKBUYORNOT_ADMIN_EMAILS", "")
+    return {normalize_email(item) for item in re.split(r"[,;\s]+", raw) if item.strip()}
+
+
+def is_admin_user(user: User) -> bool:
+    return user.subscription_status == "admin" or normalize_email(user.email) in admin_emails_from_env()
+
+
 def subscription_is_active(user: User) -> bool:
-    return user.subscription_status in {"active", "trial", "admin"}
+    return is_admin_user(user) or user.subscription_status in {"active", "trial"}
 
 
 def _row_to_user(row: sqlite3.Row) -> User:

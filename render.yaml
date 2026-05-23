@@ -14,6 +14,8 @@ services:
         value: 3.11.9
       - key: STOCKBUYORNOT_DB_PATH
         value: /opt/render/project/src/data/app.db
+      - key: STOCKBUYORNOT_ADMIN_EMAILS
+        value: ""
       - key: STOCKBUYORNOT_BILLING_ENFORCED
         value: "false"
       - key: STOCKBUYORNOT_PAYMENT_AMOUNT_CNY
