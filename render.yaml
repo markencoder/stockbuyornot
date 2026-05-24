@@ -24,5 +24,9 @@ services:
         value: manual_qr
       - key: STOCKBUYORNOT_PAYMENT_QR_URL
         value: ""
+      - key: STOCKBUYORNOT_ALIPAY_QR_URL
+        value: ""
+      - key: STOCKBUYORNOT_WECHATPAY_QR_URL
+        value: ""
       - key: STOCKBUYORNOT_SUPPORT_CONTACT
         value: ""

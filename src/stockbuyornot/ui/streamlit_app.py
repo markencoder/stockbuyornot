@@ -42,7 +42,7 @@ from stockbuyornot.follow_trade import (
 )
 from stockbuyornot.intraday import IntradayAdjustment, IntradaySummary, compute_intraday_adjustment, summarize_intraday
 from stockbuyornot.models import AnalysisResult, SignalSide
-from stockbuyornot.payment import payment_config_from_env, payment_reference
+from stockbuyornot.payment import payment_config_from_env, payment_qr_images, payment_reference
 from stockbuyornot.portfolio import PortfolioBacktestConfig, portfolio_backtest
 from stockbuyornot.radar import market_state_from_benchmark
 from stockbuyornot.view_engine import stage_label
@@ -182,10 +182,13 @@ def render_account_panel(user: User) -> None:
     with st.expander("会员/付费入口", expanded=not subscription_is_active(user)):
         st.write(f"套餐金额：{config.amount_cny} 元")
         st.code(payment_reference(user.id, user.email), language=None)
-        if config.qr_image_url:
-            st.image(config.qr_image_url, caption=f"{config.provider} 收款码")
+        qr_images = payment_qr_images(config)
+        if qr_images:
+            qr_cols = st.columns(min(2, len(qr_images)), gap="medium")
+            for index, (label, source) in enumerate(qr_images):
+                qr_cols[index % len(qr_cols)].image(source, caption=f"{label}收款码", use_container_width=True)
         else:
-            st.info("收款码暂未配置。上线收费时设置 STOCKBUYORNOT_PAYMENT_QR_URL 即可显示二维码。")
+            st.info("收款码暂未配置。上线收费时设置 STOCKBUYORNOT_ALIPAY_QR_URL 或 STOCKBUYORNOT_WECHATPAY_QR_URL 即可显示二维码。")
         if config.support_contact:
             st.caption(f"付款后联系：{config.support_contact}")
         st.caption("正式接入微信/支付宝后，支付回调只需要把用户 subscription_status 更新为 active。")

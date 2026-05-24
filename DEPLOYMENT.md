@@ -41,6 +41,8 @@ Edit `docker-compose.yml`:
 
 ```yaml
 STOCKBUYORNOT_PAYMENT_QR_URL: "https://your-domain.com/payment-qr.png"
+STOCKBUYORNOT_ALIPAY_QR_URL: ""
+STOCKBUYORNOT_WECHATPAY_QR_URL: ""
 STOCKBUYORNOT_SUPPORT_CONTACT: "your-wechat-or-email"
 STOCKBUYORNOT_ADMIN_EMAILS: "sxtythmpf@163.com"
 STOCKBUYORNOT_BILLING_ENFORCED: "true"
@@ -53,6 +55,26 @@ sudo docker compose up -d
 ```
 
 The `./data` directory is mounted into the container, so `app.db` and each user's files persist across restarts.
+
+### Payment QR Codes
+
+The repository includes built-in payment QR images:
+
+```text
+src/stockbuyornot/assets/payment/alipay.png
+src/stockbuyornot/assets/payment/wechatpay.png
+```
+
+By default, both images are displayed in the **会员/付费入口** panel and are bundled into Docker and Render deploys. You do not need to upload them separately for the first deployment.
+
+If you later host QR images on a CDN or object storage, override them with:
+
+```yaml
+STOCKBUYORNOT_ALIPAY_QR_URL: "https://your-domain.com/alipay.png"
+STOCKBUYORNOT_WECHATPAY_QR_URL: "https://your-domain.com/wechatpay.png"
+```
+
+`STOCKBUYORNOT_PAYMENT_QR_URL` is kept for backward compatibility with a single generic QR image. The app will show Alipay, WeChat, and the generic QR image when all are configured.
 
 ### Admin Panel
 
@@ -82,7 +104,9 @@ After ICP and DNS are ready, add Nginx and HTTPS in front of Streamlit.
 2. Create a Render account and choose **New +** > **Blueprint**.
 3. Select this repository. Render will read `render.yaml`.
 4. After the service is created, open **Environment** and set:
-   - `STOCKBUYORNOT_PAYMENT_QR_URL`: your payment QR image URL
+   - `STOCKBUYORNOT_ALIPAY_QR_URL`: optional external Alipay QR image URL
+   - `STOCKBUYORNOT_WECHATPAY_QR_URL`: optional external WeChat Pay QR image URL
+   - `STOCKBUYORNOT_PAYMENT_QR_URL`: optional generic QR image URL for backward compatibility
    - `STOCKBUYORNOT_SUPPORT_CONTACT`: your WeChat, email, or support contact
    - `STOCKBUYORNOT_BILLING_ENFORCED`: set to `true` when you want paid features locked
 5. Deploy the service.
