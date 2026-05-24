@@ -283,6 +283,52 @@ def test_scan_table_scores_match_factor_badges_source():
     assert row["执行窗口分"] == 64.0
 
 
+def test_watchlist_sort_score_uses_persisted_candidate_score():
+    record = {
+        "candidate_score": 67.0,
+        "factor_scores": {
+            "overall_score": 95.0,
+            "liangjia_score": 95.0,
+            "short_term_score": 95.0,
+            "long_term_score": 95.0,
+            "execution_window_score": 95.0,
+        },
+        "score": {"total": 95},
+    }
+
+    assert app.watchlist_sort_score(record) == 67.0
+
+
+def test_watchlist_sort_score_recomputes_scan_formula_for_legacy_record():
+    record = {
+        "factor_scores": {
+            "overall_score": 91.0,
+            "liangjia_score": 73.0,
+            "short_term_score": 68.0,
+            "long_term_score": 82.0,
+            "execution_window_score": 64.0,
+        },
+        "short_term_view": {"liangjia_score": 73.0},
+        "long_term_view": {"score": 82.0},
+        "score": {"total": 55},
+    }
+    scores = type(
+        "Scores",
+        (),
+        {
+            "overall_score": 91.0,
+            "liangjia_score": 73.0,
+            "short_term_score": 68.0,
+            "long_term_score": 82.0,
+            "components": {"execution_window": {"score": 64.0, "flags": []}},
+        },
+    )()
+    short_view = type("ShortView", (), {"liangjia_score": 73.0})()
+    result = type("Result", (), {"factor_scores": scores, "short_term_view": short_view})()
+
+    assert app.watchlist_sort_score(record) == scan_candidate_score(result)
+
+
 def test_score_tooltip_handles_numeric_component_values():
     scores = type(
         "Scores",

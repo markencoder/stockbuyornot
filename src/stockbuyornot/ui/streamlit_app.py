@@ -2859,10 +2859,16 @@ def analysis_result_to_watchlist_record(result: AnalysisResult, source: str) -> 
     long_view = getattr(result, "long_term_view", None)
     short_view = getattr(result, "short_term_view", None)
     factor_scores = getattr(result, "factor_scores", None)
+    candidate_score = scan_candidate_score(result)
+    execution_score = None
+    execution_flags: list[str] = []
+    if factor_scores is not None:
+        execution_score, execution_flags = execution_window_from_scores(factor_scores)
     return {
         "symbol": result.symbol,
         "source": source,
         "saved_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "candidate_score": candidate_score,
         "operation_status": "unmarked",
         "status_updated_at": "",
         "manual_price": None,
@@ -2895,10 +2901,13 @@ def analysis_result_to_watchlist_record(result: AnalysisResult, source: str) -> 
             "explanation": short_view.explanation,
         },
         "factor_scores": {} if factor_scores is None else {
+            "candidate_score": candidate_score,
             "overall_score": factor_scores.overall_score,
             "liangjia_score": factor_scores.liangjia_score,
             "short_term_score": factor_scores.short_term_score,
             "long_term_score": factor_scores.long_term_score,
+            "execution_window_score": execution_score,
+            "execution_window_flags": execution_flags,
         },
         "structure": {
             "stage": stage_label(result.structure.stage),
@@ -4434,27 +4443,55 @@ def result_to_scan_row(result: AnalysisResult) -> dict:
     return row
 
 
+def candidate_score_from_values(
+    overall_score,
+    liangjia_score,
+    short_term_score,
+    long_term_score,
+    execution_score,
+    short_liangjia_score=None,
+) -> float:
+    execution = _score_value(execution_score, 70.0)
+    short_score = _score_value(short_term_score, 0.0)
+    long_score = _score_value(long_term_score, 0.0)
+    liangjia = _score_value(short_liangjia_score, _score_value(liangjia_score, 0.0))
+    balanced_short = min(short_score, execution + 8.0)
+    balanced_liangjia = min(liangjia, execution + 12.0)
+    tradable_score = (
+        execution * 0.52
+        + balanced_liangjia * 0.26
+        + balanced_short * 0.17
+        + long_score * 0.05
+    )
+    candidates = [
+        _score_value(overall_score, 0.0) * 0.85,
+        tradable_score,
+        long_score * 0.80,
+        execution,
+    ]
+    return max(0.0, min(100.0, max(candidates)))
+
+
 def scan_candidate_score(result: AnalysisResult) -> float:
     long_view = getattr(result, "long_term_view", None)
     short_view = getattr(result, "short_term_view", None)
-    candidates: list[float] = []
     scores = getattr(result, "factor_scores", None)
     if scores is not None:
         execution_score, _ = execution_window_from_scores(scores)
-        balanced_short = min(float(scores.short_term_score), float(execution_score) + 8.0)
-        balanced_liangjia = min(float(short_view.liangjia_score if short_view is not None else scores.liangjia_score), float(execution_score) + 12.0)
-        tradable_score = (
-            float(execution_score) * 0.52
-            + balanced_liangjia * 0.26
-            + balanced_short * 0.17
-            + float(scores.long_term_score) * 0.05
+        return candidate_score_from_values(
+            scores.overall_score,
+            scores.liangjia_score,
+            scores.short_term_score,
+            scores.long_term_score,
+            execution_score,
+            short_view.liangjia_score if short_view is not None else None,
         )
-        candidates.extend([float(scores.overall_score) * 0.85, tradable_score, float(scores.long_term_score) * 0.80, float(execution_score)])
-    else:
-        if long_view is not None:
-            candidates.append(float(long_view.score))
-        if short_view is not None:
-            candidates.append(float(short_view.liangjia_score))
+
+    candidates: list[float] = []
+    if long_view is not None:
+        candidates.append(float(long_view.score))
+    if short_view is not None:
+        candidates.append(float(short_view.liangjia_score))
     if candidates:
         return max(candidates)
     decision = getattr(result, "decision", None)
@@ -4567,25 +4604,36 @@ def render_scan_save_buttons(results: list[AnalysisResult]) -> None:
 
 
 def watchlist_sort_score(record: dict) -> float:
+    return watchlist_candidate_score(record)
+
+
+def watchlist_candidate_score(record: dict) -> float:
+    for key in ["candidate_score", "候选分"]:
+        value = record.get(key)
+        if value not in [None, ""]:
+            return _score_value(value, 0.0)
     factors = record.get("factor_scores") or {}
     long_view = record.get("long_term_view") or {}
     short_view = record.get("short_term_view") or {}
     score = record.get("score") or {}
+    persisted_factor_score = factors.get("candidate_score")
+    if persisted_factor_score not in [None, ""]:
+        return _score_value(persisted_factor_score, 0.0)
+    if factors:
+        return candidate_score_from_values(
+            factors.get("overall_score", score.get("total", 0.0)),
+            factors.get("liangjia_score", score.get("total", 0.0)),
+            factors.get("short_term_score", short_view.get("short_term_score", 0.0)),
+            factors.get("long_term_score", long_view.get("score", 0.0)),
+            factors.get("execution_window_score", factors.get("execution_score", 70.0)),
+            short_view.get("liangjia_score"),
+        )
     values = [
-        factors.get("overall_score"),
-        factors.get("long_term_score"),
-        factors.get("short_term_score"),
         short_view.get("liangjia_score"),
         long_view.get("score"),
         score.get("total"),
     ]
-    numeric = []
-    for value in values:
-        try:
-            if value not in [None, ""]:
-                numeric.append(float(value))
-        except (TypeError, ValueError):
-            pass
+    numeric = [_score_value(value, -1.0) for value in values if value not in [None, ""]]
     return max(numeric) if numeric else 0.0
 
 
