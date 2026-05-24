@@ -67,7 +67,17 @@ MARKET_INDEX_OPTIONS = {
 }
 
 
-st.set_page_config(page_title="A股量价工作台", page_icon="📈", layout="wide")
+BRAND_NAME = "量价天枢"
+BRAND_SUBTITLE = "基于供需结构识别的量价交易建议软件(Volume-Price Alpha Decision System)"
+BRAND_DESCRIPTION = (
+    "量价天枢不是一个追逐消息、堆砌指标、主观预测涨跌的软件，而是一套以“价格”和“成交量”为源头数据的市场行为识别系统。"
+    "它从当下真实走势出发，通过量价变化、K线形态与关键位置，识别市场背后的供需强弱、资金参与程度与群体情绪变化，"
+    "帮助用户判断哪些股票正在由弱转强、哪些位置具备更高概率的买入优势、哪些信号提示需求衰竭与风险释放。"
+    "我们相信，交易的核心不是猜测未来，而是尊重事实、捕捉变化、跟随概率；让系统替你过滤噪音，让信号帮助你更冷静地接近市场真相。"
+)
+
+
+st.set_page_config(page_title=BRAND_NAME, page_icon="📈", layout="wide")
 
 
 def main() -> None:
@@ -82,7 +92,7 @@ def main() -> None:
         request_retries=settings["request_retries"],
     )
 
-    st.title("A股量价信号工作台")
+    render_brand_header()
     _, market_col = st.columns([0.58, 0.42], gap="large")
     with market_col:
         render_market_status_widget(settings)
@@ -125,8 +135,9 @@ def render_auth_gate() -> User | None:
         st.markdown(
             """
             <div class="auth-heading">
-                <h1>A股量价信号工作台</h1>
-                <p>登录后进入你的个人工作台</p>
+                <h1>量价天枢</h1>
+                <p>基于供需结构识别的量价交易建议软件(Volume-Price Alpha Decision System)</p>
+                <p class="auth-description">量价天枢以价格和成交量为源头数据，从真实走势出发识别供需强弱、资金参与和风险释放，让系统替你过滤噪音，让信号帮助你更冷静地接近市场真相。</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -164,6 +175,19 @@ def render_auth_gate() -> User | None:
                         st.rerun()
 
     return None
+
+
+def render_brand_header() -> None:
+    st.markdown(
+        f"""
+        <section class="brand-header">
+            <h1>{html.escape(BRAND_NAME)}</h1>
+            <div class="brand-subtitle">{html.escape(BRAND_SUBTITLE)}</div>
+            <p>{html.escape(BRAND_DESCRIPTION)}</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_account_panel(user: User) -> None:
@@ -1031,7 +1055,7 @@ def render_intraday_chart(df: pd.DataFrame, title: str = "分时走势") -> None
 
 
 def render_quick_usage_tab() -> None:
-    st.subheader("量价交易工作台简明用法")
+    st.subheader("量价天枢简明用法")
     st.caption("先计划，后执行；先风控，后买入。系统用于研究、复盘和辅助决策，不替代你的独立判断。")
 
     st.markdown(
@@ -2101,6 +2125,34 @@ def inject_css() -> None:
         }
         h1 { font-size: 2.25rem; line-height: 1.15; margin-bottom: 0.75rem; }
         h3 { margin-top: 0.7rem; margin-bottom: 0.75rem; }
+        .brand-header {
+            margin: 0 0 1.15rem;
+            padding: 18px 0 6px;
+            max-width: 1120px;
+        }
+        .brand-header h1 {
+            margin: 0 0 8px;
+            color: #0f172a;
+            font-size: clamp(2.1rem, 4vw, 4.2rem);
+            line-height: 1.04;
+            font-weight: 800;
+            letter-spacing: 0;
+        }
+        .brand-subtitle {
+            color: #1f2937;
+            font-size: clamp(1rem, 1.4vw, 1.26rem);
+            font-weight: 650;
+            line-height: 1.5;
+            margin-bottom: 10px;
+        }
+        .brand-header p {
+            margin: 0;
+            color: #475569;
+            font-size: 0.98rem;
+            font-style: italic;
+            line-height: 1.75;
+            max-width: 1080px;
+        }
         .auth-heading {
             margin: 8vh 0 1rem;
             text-align: center;
@@ -2116,6 +2168,14 @@ def inject_css() -> None:
             margin: 0;
             color: #64748b;
             font-size: 0.95rem;
+        }
+        .auth-heading .auth-description {
+            margin: 0.72rem auto 0;
+            max-width: 560px;
+            color: #475569;
+            font-size: 0.9rem;
+            font-style: italic;
+            line-height: 1.65;
         }
         .metric-card {
             min-height: 112px;
