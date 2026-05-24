@@ -42,7 +42,7 @@ Edit `docker-compose.yml`:
 ```yaml
 STOCKBUYORNOT_PAYMENT_QR_URL: "https://your-domain.com/payment-qr.png"
 STOCKBUYORNOT_SUPPORT_CONTACT: "your-wechat-or-email"
-STOCKBUYORNOT_ADMIN_EMAILS: "your-admin-email@example.com"
+STOCKBUYORNOT_ADMIN_EMAILS: "sxtythmpf@163.com"
 STOCKBUYORNOT_BILLING_ENFORCED: "true"
 ```
 
@@ -56,10 +56,16 @@ The `./data` directory is mounted into the container, so `app.db` and each user'
 
 ### Admin Panel
 
-Register your own account first, then set:
+Register with the admin email first:
+
+```text
+sxtythmpf@163.com
+```
+
+The default compose and Render configs already set:
 
 ```yaml
-STOCKBUYORNOT_ADMIN_EMAILS: "your-admin-email@example.com"
+STOCKBUYORNOT_ADMIN_EMAILS: "sxtythmpf@163.com"
 ```
 
 Restart the service. After logging in with that email, the sidebar will show **管理员后台**, where you can update a user's subscription status by email.

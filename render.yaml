@@ -15,7 +15,7 @@ services:
       - key: STOCKBUYORNOT_DB_PATH
         value: /opt/render/project/src/data/app.db
       - key: STOCKBUYORNOT_ADMIN_EMAILS
-        value: ""
+        value: sxtythmpf@163.com
       - key: STOCKBUYORNOT_BILLING_ENFORCED
         value: "false"
       - key: STOCKBUYORNOT_PAYMENT_AMOUNT_CNY
