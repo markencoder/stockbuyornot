@@ -81,8 +81,8 @@ def main() -> None:
     with market_col:
         render_market_status_widget(settings)
 
-    tab_analyze, tab_scan, tab_watchlist, tab_purchased, tab_backtest, tab_follow, tab_data, tab_help, tab_quick_usage = st.tabs(
-        ["单票诊断", "股票池扫描", "我的备选池", "已购买", "策略回测", "跟随交易", "数据工具", "使用说明", "简明用法"]
+    tab_analyze, tab_scan, tab_watchlist, tab_purchased, tab_backtest, tab_follow, tab_data, tab_quick_usage = st.tabs(
+        ["单票诊断", "股票池扫描", "我的备选池", "已购买", "策略回测", "跟随交易", "数据工具", "简明用法"]
     )
     with tab_analyze:
         render_analyze_tab(settings, provider)
@@ -101,8 +101,6 @@ def main() -> None:
             render_follow_trade_tab(settings, provider)
     with tab_data:
         render_data_tab(settings, provider)
-    with tab_help:
-        render_help_tab()
     with tab_quick_usage:
         render_quick_usage_tab()
 
@@ -944,25 +942,6 @@ def render_intraday_chart(df: pd.DataFrame, title: str = "分时走势") -> None
     st.altair_chart(chart, use_container_width=True)
 
 
-def render_help_tab() -> None:
-    st.subheader("工作台说明")
-    st.markdown(
-        """
-        **单票诊断**：读取一只股票的日线数据，输出结构阶段、关键支撑/压力、量价信号、评分和解释。
-
-        **股票池扫描**：支持手动代码、内置股票池、行业/概念板块、本地 CSV 文件夹，批量筛选分数达标的候选。
-
-        **策略回测**：使用当前买卖信号和风控模型，在单只股票历史数据上做事件回测，展示资金曲线、交易流水和配对盈亏。
-
-        **跟随交易**：根据美股、韩股前一晚涨跌，映射到A股上游企业，生成开盘前跟随观察清单，并可叠加A股量价诊断。
-
-        **数据工具**：快速检查数据源、预览日K或1/5/15/30/60分钟分时 OHLCV 数据，并导出 CSV。
-
-        程序的核心定位是“量价信号解释器”，不是涨跌预测器。真实交易前仍需人工复盘、参数校准和风险控制。
-        """
-    )
-
-
 def render_quick_usage_tab() -> None:
     st.subheader("量价交易工作台简明用法")
     st.caption("先计划，后执行；先风控，后买入。系统用于研究、复盘和辅助决策，不替代你的独立判断。")
@@ -1065,6 +1044,183 @@ def render_quick_usage_tab() -> None:
         """,
         unsafe_allow_html=True,
     )
+    render_usage_reference_section()
+
+
+def render_usage_reference_section() -> None:
+    st.divider()
+    st.subheader("完整使用说明")
+
+    with st.expander("工作台功能说明", expanded=True):
+        st.markdown(
+            """
+            **单票诊断**：读取一只股票的日线数据，输出结构阶段、关键支撑/压力、量价信号、评分和解释。
+
+            **股票池扫描**：支持手动代码、内置股票池、行业/概念板块、本地 CSV 文件夹，批量筛选分数达标的候选。
+
+            **我的备选池**：保存候选股票的诊断快照、买入区间、失效价、止损参考和操作状态，支持批量更新对照价和快速删除。
+
+            **已购买**：保存已买入股票的买入价、股数、当前价、持仓备注和买入时诊断快照，用于重点观察和风险复盘。
+
+            **策略回测**：使用当前买卖信号和风控模型，在单只股票或组合股票池上做历史回测，展示资金曲线、交易流水和配对盈亏。
+
+            **跟随交易**：根据美股、韩股前一晚涨跌，映射到A股上游企业，生成开盘前跟随观察清单，并可叠加A股量价诊断。
+
+            **数据工具**：快速检查数据源、预览日K或1/5/15/30/60分钟分时 OHLCV 数据，并导出 CSV。
+
+            程序的核心定位是“量价信号解释器”，不是涨跌预测器。真实交易前仍需人工复盘、参数校准和风险控制。
+            """
+        )
+
+    with st.expander("本地启动与常用命令", expanded=False):
+        st.markdown(
+            """
+            当前推荐环境：
+
+            ```text
+            C:\\ProgramData\\Anaconda3\\envs\\tower312
+            ```
+
+            在项目目录启动工作台：
+
+            ```powershell
+            cd C:\\Users\\pro6a\\Documents\\stockbuyornot
+            .\\workbench.cmd
+            ```
+
+            打开地址：
+
+            ```text
+            http://127.0.0.1:8501
+            ```
+
+            如果打不开，或浏览器提示 `127.0.0.1 拒绝连接`：
+
+            ```powershell
+            .\\restart_workbench.cmd
+            ```
+
+            命令行单票分析：
+
+            ```powershell
+            .\\stockbuyornot.cmd analyze --symbol 000001 --start 20240101 --end 20260517
+            ```
+
+            命令行股票扫描：
+
+            ```powershell
+            .\\stockbuyornot.cmd scan --symbols 000001 600519 300750 --start 20240101 --end 20260517 --min-score 60
+            ```
+
+            导出扫描结果：
+
+            ```powershell
+            .\\stockbuyornot.cmd scan --symbols 000001 600519 300750 --start 20240101 --end 20260517 --min-score 60 --output candidates.csv
+            ```
+            """
+        )
+
+    with st.expander("本地 CSV 数据", expanded=False):
+        st.markdown(
+            """
+            单个 CSV 文件分析：
+
+            ```powershell
+            .\\stockbuyornot.cmd analyze --csv data\\daily\\000001.csv
+            ```
+
+            文件夹扫描：
+
+            ```powershell
+            .\\stockbuyornot.cmd scan --csv-dir data\\daily --start 20240101 --end 20260517 --min-score 70 --output candidates.csv
+            ```
+
+            CSV 至少包含：
+
+            ```text
+            date,open,high,low,close,volume
+            ```
+
+            推荐包含：
+
+            ```text
+            amount,symbol
+            ```
+            """
+        )
+
+    with st.expander("回测与组合回测", expanded=False):
+        st.markdown(
+            """
+            单票回测：
+
+            ```powershell
+            .\\stockbuyornot.cmd backtest --symbol 000001 --start 20200101 --end 20260517
+            ```
+
+            组合回测入口主要用于评估“第二阶段主升 + 缩量回踩 + 上涨中继买点”的股票池级别收益。
+
+            小股票池测试：
+
+            ```powershell
+            .\\stockbuyornot.cmd portfolio-backtest --symbols 000001 600519 300750 --start 20240101 --end 20260517 --output candidate\\trend_pullback_test.csv
+            ```
+
+            指数股票池：
+
+            ```powershell
+            .\\stockbuyornot.cmd portfolio-backtest --pool sse50 --start 20240101 --end 20260517 --max-positions 5 --output candidate\\sse50_trend_pullback.csv
+            .\\stockbuyornot.cmd portfolio-backtest --pool csi300 --start 20240101 --end 20260517 --max-positions 5 --output candidate\\csi300_trend_pullback.csv
+            .\\stockbuyornot.cmd portfolio-backtest --pool csi500 --start 20240101 --end 20260517 --max-positions 5 --output candidate\\csi500_trend_pullback.csv
+            .\\stockbuyornot.cmd portfolio-backtest --pool chinext --start 20240101 --end 20260517 --max-positions 5 --output candidate\\chinext_trend_pullback.csv
+            ```
+
+            常用参数：
+
+            ```powershell
+            --market-mode balanced
+            --max-positions 5
+            --neutral-max-positions 2
+            --min-score 75
+            --min-avg-amount 50000000
+            --max-stop-distance 0.07
+            --min-relative-strength 0.03
+            --min-reward-risk 1.8
+            --breakeven-r 1.0
+            --trail-start-r 2.0
+            --trail-pct 0.10
+            --stale-days 12
+            --max-holding-days 45
+            ```
+            """
+        )
+
+    with st.expander("跟随交易", expanded=False):
+        st.markdown(
+            """
+            跟随交易页用于开盘前根据美股、韩股前一晚涨跌，映射 A 股上游企业。
+
+            使用方式：
+
+            ```text
+            1. 选择“自动选强势股”，刷新近期美股/韩股观察池。
+            2. 勾选要跟随的海外标的；美股会自动计算近期涨幅和前一交易日涨跌幅。
+            3. 韩股当前作为重点观察池展示，可在表格里手动补充涨跌幅。
+            4. 选择用“前一交易日涨跌幅”或“最近涨幅”生成跟随信号。
+            5. 程序根据内置产业链映射生成 A 股候选。
+            6. 可勾选“叠加A股量价诊断”，过滤掉量价结构较弱的标的。
+            7. 下载 follow_trade_candidates.csv 作为开盘观察清单。
+            ```
+
+            注意：
+
+            ```text
+            跟随交易只生成观察清单，不自动下单。
+            若A股高开超过5%不追；开盘后跌破开盘价且放量，应放弃跟随。
+            映射表是研究辅助，后续需要定期维护产业链关系。
+            ```
+            """
+        )
 
 
 def usage_card(step: str, title: str, text: str) -> str:
