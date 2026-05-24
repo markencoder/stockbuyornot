@@ -1,5 +1,7 @@
 import pandas as pd
+import streamlit as st
 
+from stockbuyornot.auth import User
 from stockbuyornot.ui import streamlit_app as app
 from stockbuyornot.ui.streamlit_app import (
     compact_scan_display,
@@ -44,6 +46,20 @@ def _record(price: float | None) -> dict:
             }
         ],
     }
+
+
+def test_current_user_data_path_uses_persistent_data_root(tmp_path, monkeypatch):
+    user = User(id=7, email="Trader+VIP@Example.COM", display_name="Trader", subscription_status="active")
+
+    monkeypatch.setenv("STOCKBUYORNOT_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(app, "get_user_by_id", lambda user_id: user if user_id == 7 else None)
+    st.session_state["auth_user_id"] = 7
+    try:
+        path = app.current_user_data_path("watchlist.json")
+    finally:
+        st.session_state.pop("auth_user_id", None)
+
+    assert path == tmp_path / "users" / "trader_vip_example.com" / "watchlist.json"
 
 
 def test_compute_market_status_snapshot_identifies_strong_market():

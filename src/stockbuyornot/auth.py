@@ -11,7 +11,8 @@ from datetime import date
 from pathlib import Path
 
 
-DEFAULT_DB_PATH = Path("data/app.db")
+DEFAULT_DATA_DIR = Path("data")
+DEFAULT_DB_PATH = DEFAULT_DATA_DIR / "app.db"
 PASSWORD_ITERATIONS = 260_000
 MEMBER_STATUSES = {"active", "member"}
 ADMIN_STATUS = "admin"
@@ -39,8 +40,14 @@ class User:
     updated_at: str | None = None
 
 
+def data_root() -> Path:
+    return Path(os.environ.get("STOCKBUYORNOT_DATA_DIR", DEFAULT_DATA_DIR))
+
+
 def database_path() -> Path:
-    return Path(os.environ.get("STOCKBUYORNOT_DB_PATH", DEFAULT_DB_PATH))
+    if "STOCKBUYORNOT_DB_PATH" in os.environ:
+        return Path(os.environ["STOCKBUYORNOT_DB_PATH"])
+    return data_root() / "app.db"
 
 
 def connect(db_path: Path | None = None) -> sqlite3.Connection:

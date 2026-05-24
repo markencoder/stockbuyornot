@@ -54,3 +54,21 @@ http://127.0.0.1:8501
 ```powershell
 .\check.ps1
 ```
+
+## 服务器持久化数据
+
+服务器部署时请把 `STOCKBUYORNOT_DATA_DIR` 指向一个持久化卷目录，例如 `/data/stockbuyornot`。账号数据库、每个账号的备选池和已购买股票都会写入这个目录：
+
+```text
+STOCKBUYORNOT_DATA_DIR=/data/stockbuyornot
+```
+
+目录结构示例：
+
+```text
+/data/stockbuyornot/app.db
+/data/stockbuyornot/users/<账号>/watchlist.json
+/data/stockbuyornot/users/<账号>/purchased.json
+```
+
+如果单独设置了 `STOCKBUYORNOT_DB_PATH`，数据库会使用该路径；备选池和已购买股票仍使用 `STOCKBUYORNOT_DATA_DIR`。重新 build 镜像不会保留容器内临时文件，生产环境必须把该目录挂到持久化存储。

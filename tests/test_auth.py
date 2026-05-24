@@ -6,6 +6,8 @@ from stockbuyornot.auth import (
     authenticate_user,
     consume_trial_usage,
     create_user,
+    data_root,
+    database_path,
     downgrade_expired_memberships,
     hash_password,
     is_member_user,
@@ -108,3 +110,24 @@ def test_member_usage_is_unlimited(tmp_path: Path):
 
 def test_sanitize_user_key_keeps_user_storage_path_safe():
     assert sanitize_user_key("Trader+VIP@Example.COM") == "trader_vip_example.com"
+
+
+def test_data_root_env_controls_default_database_path(tmp_path: Path, monkeypatch):
+    persistent_dir = tmp_path / "persistent-data"
+
+    monkeypatch.setenv("STOCKBUYORNOT_DATA_DIR", str(persistent_dir))
+    monkeypatch.delenv("STOCKBUYORNOT_DB_PATH", raising=False)
+
+    assert data_root() == persistent_dir
+    assert database_path() == persistent_dir / "app.db"
+
+
+def test_db_path_env_overrides_data_root(tmp_path: Path, monkeypatch):
+    persistent_dir = tmp_path / "persistent-data"
+    explicit_db = tmp_path / "db" / "custom.db"
+
+    monkeypatch.setenv("STOCKBUYORNOT_DATA_DIR", str(persistent_dir))
+    monkeypatch.setenv("STOCKBUYORNOT_DB_PATH", str(explicit_db))
+
+    assert data_root() == persistent_dir
+    assert database_path() == explicit_db

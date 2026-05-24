@@ -16,6 +16,7 @@ from stockbuyornot.auth import (
     authenticate_user,
     consume_trial_usage,
     create_user,
+    data_root,
     get_user_by_email,
     get_user_by_id,
     initialize_auth_db,
@@ -303,11 +304,11 @@ def _admin_usage_text(user: User, feature: str) -> str:
 def current_user_data_path(filename: str) -> Path:
     user_id = st.session_state.get("auth_user_id")
     if not user_id:
-        return Path("data") / filename
+        return data_root() / filename
     user = get_user_by_id(int(user_id))
     if user is None:
-        return Path("data") / filename
-    return Path("data/users") / sanitize_user_key(user.email) / filename
+        return data_root() / filename
+    return data_root() / "users" / sanitize_user_key(user.email) / filename
 
 
 def current_user() -> User | None:
