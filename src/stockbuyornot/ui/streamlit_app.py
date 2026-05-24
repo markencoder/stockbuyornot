@@ -14,15 +14,21 @@ from stockbuyornot.analysis import analyze_ohlcv
 from stockbuyornot.auth import (
     User,
     authenticate_user,
+    consume_trial_usage,
     create_user,
     get_user_by_email,
     get_user_by_id,
     initialize_auth_db,
     is_admin_user,
+    is_member_user,
     list_users,
     sanitize_user_key,
     subscription_is_active,
+    trial_daily_limit,
+    trial_storage_limit,
+    trial_usage_snapshot,
     update_subscription_status,
+    user_tier,
 )
 from stockbuyornot.backtest import backtest_single
 from stockbuyornot.data.providers import AkshareProvider, CsvProvider
@@ -175,6 +181,7 @@ def render_account_panel(user: User) -> None:
     st.caption(f"{user.email} | {status_label}")
     if user.subscription_expires_at:
         st.caption(f"到期时间：{user.subscription_expires_at}")
+    render_trial_usage_panel(user)
     if st.button("退出登录", use_container_width=True):
         st.session_state.pop("auth_user_id", None)
         st.rerun()
@@ -195,7 +202,7 @@ def render_account_panel(user: User) -> None:
 
 
 def render_admin_panel() -> None:
-    status_options = ["free", "trial", "active", "expired", "admin"]
+    status_options = ["trial", "active", "admin"]
     with st.expander("管理员后台", expanded=False):
         st.caption("按邮箱开通、取消或调整会员状态。")
         with st.form("admin_subscription_form"):
@@ -218,10 +225,17 @@ def render_admin_panel() -> None:
             frame = pd.DataFrame(
                 [
                     {
+                        "ID": item.id,
                         "邮箱": item.email,
                         "昵称": item.display_name,
                         "状态": "admin" if is_admin_user(item) else item.subscription_status,
                         "到期时间": item.subscription_expires_at or "",
+                        "注册时间": item.created_at or "",
+                        "更新时间": item.updated_at or "",
+                        "单股诊断": _admin_usage_text(item, "single_diagnosis"),
+                        "股票池扫描": _admin_usage_text(item, "stock_pool_scan"),
+                        "策略回测": _admin_usage_text(item, "backtest"),
+                        "跟随交易": _admin_usage_text(item, "follow_trade"),
                     }
                     for item in users
                 ]
@@ -229,6 +243,16 @@ def render_admin_panel() -> None:
             st.dataframe(frame, use_container_width=True, hide_index=True)
         else:
             st.info("暂无注册用户。")
+
+
+def _admin_usage_text(user: User, feature: str) -> str:
+    if user_tier(user) != "trial":
+        return "不限"
+    limit = trial_daily_limit(feature)
+    if limit is None:
+        return ""
+    used, _ = trial_usage_snapshot(user).get(feature, (0, limit))
+    return f"{used}/{limit}"
 
 
 def current_user_data_path(filename: str) -> Path:
@@ -239,6 +263,57 @@ def current_user_data_path(filename: str) -> Path:
     if user is None:
         return Path("data") / filename
     return Path("data/users") / sanitize_user_key(user.email) / filename
+
+
+def current_user() -> User | None:
+    user_id = st.session_state.get("auth_user_id")
+    if not user_id:
+        return None
+    return get_user_by_id(int(user_id))
+
+
+def consume_feature_use(feature: str, feature_label: str) -> bool:
+    user = current_user()
+    if user is None:
+        return True
+    allowed, used, limit = consume_trial_usage(user, feature)
+    if allowed:
+        if user_tier(user) == "trial" and limit is not None:
+            st.caption(f"试用会员今日{feature_label}用量：{used}/{limit}")
+        return True
+    st.warning(f"试用会员每天只能使用{feature_label} {limit} 次。升级会员后可使用全部功能。")
+    return False
+
+
+def can_save_limited_record(kind: str, records: list[dict], symbol: str, label: str) -> bool:
+    user = current_user()
+    if user is None or is_member_user(user):
+        return True
+    limit = trial_storage_limit(kind)
+    if limit is None:
+        return True
+    existing = any(str(item.get("symbol", "")) == str(symbol) for item in records)
+    if existing or len(records) < limit:
+        return True
+    st.warning(f"试用会员最多只能保存 {limit} 支{label}。升级会员后可不限量使用。")
+    return False
+
+
+def render_trial_usage_panel(user: User) -> None:
+    if user_tier(user) != "trial":
+        return
+    usage = trial_usage_snapshot(user)
+    if not usage:
+        return
+    labels = {
+        "single_diagnosis": "单股诊断",
+        "stock_pool_scan": "股票池扫描",
+        "backtest": "策略回测",
+        "follow_trade": "跟随交易",
+    }
+    st.caption(
+        "试用额度：" + "；".join(f"{labels.get(feature, feature)} {used}/{limit}" for feature, (used, limit) in usage.items())
+    )
 
 
 def billing_allows_feature(user: User, feature_name: str) -> bool:
@@ -298,6 +373,8 @@ def render_analyze_tab(settings: dict, provider: AkshareProvider) -> None:
         run = input_cols[2].button("开始诊断", type="primary", use_container_width=True)
 
     if run:
+        if not consume_feature_use("single_diagnosis", "单股诊断"):
+            return
         try:
             df = load_single_data(data_source, symbol, settings, provider, uploaded, csv_path)
             benchmark = load_benchmark_for_ui(provider, settings)
@@ -320,8 +397,8 @@ def render_analyze_tab(settings: dict, provider: AkshareProvider) -> None:
     save_cols = st.columns([0.72, 0.28], gap="medium")
     save_cols[0].caption("可以把当前诊断快照保存到我的备选池，后续继续跟踪评分、量价信号和关键价位。")
     if save_cols[1].button("加入我的备选池", type="primary", use_container_width=True, key=f"save_single_{result.symbol}"):
-        save_watchlist_result(result, source="单票诊断")
-        st.success(f"{result.symbol} 已保存到我的备选池。")
+        if save_watchlist_result(result, source="单票诊断"):
+            st.success(f"{result.symbol} 已保存到我的备选池。")
     render_price_volume(df)
     render_result_detail(result)
 
@@ -388,6 +465,8 @@ def render_scan_tab(settings: dict, provider: AkshareProvider) -> None:
 
     if limit:
         sources = sources[: int(limit)]
+    if not consume_feature_use("stock_pool_scan", "股票池扫描"):
+        return
 
     benchmark = load_benchmark_for_ui(provider, settings)
     sector_benchmark = load_board_for_ui(provider, board_name, settings)
@@ -482,6 +561,9 @@ def render_backtest_tab(settings: dict, provider: AkshareProvider) -> None:
 
     if not run:
         st.info("设置参数后运行回测。回测使用信号日之后的价格，结果用于验证信号，不代表未来收益。")
+        return
+
+    if not consume_feature_use("backtest", "策略回测"):
         return
 
     try:
@@ -627,6 +709,9 @@ def render_follow_trade_tab(settings: dict, provider: AkshareProvider) -> None:
                 - 如果叠加量价诊断，优先看评分更高且没有卖出/回避信号的标的。
                 """
             )
+        return
+
+    if not consume_feature_use("follow_trade", "跟随交易"):
         return
 
     candidates = build_follow_candidates(moves, min_up_pct=min_up_pct)
@@ -2170,8 +2255,8 @@ def render_scan_save_buttons(results: list[AnalysisResult]) -> None:
             already_saved = result.symbol in saved_symbols
             label = "更新备选池" if already_saved else "加入备选池"
             if cols[4].button(label, key=f"save_scan_{result.symbol}_{result.as_of.date()}", use_container_width=True):
-                save_watchlist_result(result, source="股票池扫描")
-                st.success(f"{result.symbol} 已保存到我的备选池。")
+                if save_watchlist_result(result, source="股票池扫描"):
+                    st.success(f"{result.symbol} 已保存到我的备选池。")
 
 
 def render_watchlist_tab(settings: dict, provider: AkshareProvider) -> None:
@@ -2303,8 +2388,8 @@ def render_watchlist_tab(settings: dict, provider: AkshareProvider) -> None:
 
             action_cols = st.columns(2, gap="medium")
             if action_cols[0].button("加入已购买重点观察", key=f"buy_watchlist_{record.get('symbol', '')}", use_container_width=True):
-                add_purchased_from_watchlist(record)
-                st.success(f"{record.get('symbol', '')} 已加入已购买重点观察。")
+                if add_purchased_from_watchlist(record):
+                    st.success(f"{record.get('symbol', '')} 已加入已购买重点观察。")
 
             if action_cols[1].button("从备选池移除", key=f"remove_watchlist_{record.get('symbol', '')}", use_container_width=True):
                 remove_watchlist_symbol(record.get("symbol", ""))
@@ -2574,9 +2659,11 @@ def save_purchased_records(records: list[dict]) -> None:
         json.dump(records, file, ensure_ascii=False, indent=2)
 
 
-def add_purchased_from_watchlist(record: dict) -> None:
+def add_purchased_from_watchlist(record: dict) -> bool:
     symbol = record.get("symbol", "")
     existing_records = load_purchased_records()
+    if not can_save_limited_record("purchased", existing_records, symbol, "已购买股票"):
+        return False
     existing = next((item for item in existing_records if item.get("symbol") == symbol), {})
     purchased = {
         "symbol": symbol,
@@ -2591,6 +2678,7 @@ def add_purchased_from_watchlist(record: dict) -> None:
     records = [item for item in existing_records if item.get("symbol") != symbol]
     records.append(purchased)
     save_purchased_records(records)
+    return True
 
 
 def update_purchased_record(symbol: str, buy_date: str, buy_price: float, shares: int, current_price: float, note: str) -> None:
@@ -2624,9 +2712,11 @@ def sort_purchased_records(records: list[dict]) -> list[dict]:
     )
 
 
-def save_watchlist_result(result: AnalysisResult, source: str) -> None:
+def save_watchlist_result(result: AnalysisResult, source: str) -> bool:
     record = analysis_result_to_watchlist_record(result, source)
     existing_records = load_watchlist_records()
+    if not can_save_limited_record("watchlist", existing_records, result.symbol, "备选股票"):
+        return False
     existing = next((item for item in existing_records if item.get("symbol") == result.symbol), {})
     for key in ["operation_status", "status_updated_at", "manual_price", "operator_note"]:
         if key in existing:
@@ -2634,6 +2724,7 @@ def save_watchlist_result(result: AnalysisResult, source: str) -> None:
     records = [item for item in existing_records if item.get("symbol") != result.symbol]
     records.append(record)
     save_watchlist_records(records)
+    return True
 
 
 def remove_watchlist_symbol(symbol: str) -> None:
@@ -3172,6 +3263,9 @@ def render_portfolio_backtest_panel(settings: dict, provider: AkshareProvider) -
 
     if not run:
         st.info("建议先用手动代码或较小股票池验证参数。组合回测会逐日评估候选，标的越多、区间越长，耗时越明显。")
+        return
+
+    if not consume_feature_use("backtest", "策略回测"):
         return
 
     market_mode = {"严格": "strict", "均衡": "balanced", "积极": "aggressive"}[market_mode_label]
@@ -4493,8 +4587,8 @@ def render_scan_save_buttons(results: list[AnalysisResult]) -> None:
             already_saved = result.symbol in saved_symbols
             label = "更新备选池" if already_saved else "加入备选池"
             if cols[4].button(label, key=f"save_scan_{result.symbol}_{result.as_of.date()}", use_container_width=True):
-                save_watchlist_result(result, source="股票池扫描")
-                st.success(f"{result.symbol} 已保存到我的备选池。")
+                if save_watchlist_result(result, source="股票池扫描"):
+                    st.success(f"{result.symbol} 已保存到我的备选池。")
 
 
 def watchlist_sort_score(record: dict) -> float:

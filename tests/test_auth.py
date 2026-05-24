@@ -4,11 +4,16 @@ import pytest
 
 from stockbuyornot.auth import (
     authenticate_user,
+    consume_trial_usage,
     create_user,
+    downgrade_expired_memberships,
     hash_password,
+    is_member_user,
     sanitize_user_key,
     subscription_is_active,
     update_subscription_status,
+    usage_count,
+    user_tier,
     verify_password,
 )
 
@@ -30,8 +35,9 @@ def test_create_and_authenticate_user(tmp_path: Path):
     assert signed_in is not None
     assert signed_in.id == created.id
     assert signed_in.display_name == "Trader"
-    assert signed_in.subscription_status == "free"
-    assert not subscription_is_active(signed_in)
+    assert signed_in.subscription_status == "trial"
+    assert subscription_is_active(signed_in)
+    assert user_tier(signed_in) == "trial"
 
 
 def test_duplicate_email_is_rejected(tmp_path: Path):
@@ -51,7 +57,53 @@ def test_subscription_status_can_be_upgraded(tmp_path: Path):
 
     assert signed_in is not None
     assert subscription_is_active(signed_in)
+    assert is_member_user(signed_in)
     assert signed_in.subscription_expires_at == "2026-12-31"
+
+
+def test_expired_member_is_downgraded_to_trial(tmp_path: Path):
+    db_path = tmp_path / "app.db"
+    user = create_user("expired@example.com", "strong-pass-123", db_path=db_path)
+
+    update_subscription_status(user.id, "active", "2026-01-01", db_path)
+    downgrade_expired_memberships(db_path)
+    signed_in = authenticate_user("expired@example.com", "strong-pass-123", db_path)
+
+    assert signed_in is not None
+    assert signed_in.subscription_status == "trial"
+    assert signed_in.subscription_expires_at is None
+
+
+def test_trial_usage_is_limited_per_day(tmp_path: Path):
+    db_path = tmp_path / "app.db"
+    user = create_user("trial@example.com", "strong-pass-123", db_path=db_path)
+
+    for index in range(10):
+        allowed, used, limit = consume_trial_usage(user, "single_diagnosis", db_path=db_path)
+        assert allowed
+        assert used == index + 1
+        assert limit == 10
+
+    allowed, used, limit = consume_trial_usage(user, "single_diagnosis", db_path=db_path)
+
+    assert not allowed
+    assert used == 10
+    assert limit == 10
+    assert usage_count(user.id, "single_diagnosis", db_path=db_path) == 10
+
+
+def test_member_usage_is_unlimited(tmp_path: Path):
+    db_path = tmp_path / "app.db"
+    user = create_user("member@example.com", "strong-pass-123", db_path=db_path)
+    update_subscription_status(user.id, "active", "2026-12-31", db_path)
+    member = authenticate_user("member@example.com", "strong-pass-123", db_path)
+
+    assert member is not None
+    for _ in range(12):
+        allowed, used, limit = consume_trial_usage(member, "single_diagnosis", db_path=db_path)
+        assert allowed
+        assert used == 0
+        assert limit == 10
 
 
 def test_sanitize_user_key_keeps_user_storage_path_safe():
