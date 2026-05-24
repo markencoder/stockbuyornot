@@ -48,7 +48,7 @@ from stockbuyornot.follow_trade import (
 )
 from stockbuyornot.intraday import IntradayAdjustment, IntradaySummary, compute_intraday_adjustment, summarize_intraday
 from stockbuyornot.models import AnalysisResult, SignalSide
-from stockbuyornot.payment import payment_config_from_env, payment_qr_images, payment_reference
+from stockbuyornot.payment import payment_config_from_env, payment_qr_images
 from stockbuyornot.portfolio import PortfolioBacktestConfig, portfolio_backtest
 from stockbuyornot.radar import market_state_from_benchmark
 from stockbuyornot.view_engine import stage_label
@@ -92,8 +92,9 @@ def main() -> None:
         request_retries=settings["request_retries"],
     )
 
-    render_brand_header()
-    _, market_col = st.columns([0.58, 0.42], gap="large")
+    brand_col, market_col = st.columns([0.58, 0.42], gap="large")
+    with brand_col:
+        render_brand_header()
     with market_col:
         render_market_status_widget(settings)
 
@@ -211,8 +212,29 @@ def render_account_panel(user: User) -> None:
         st.rerun()
 
     with st.expander("会员/付费入口", expanded=not subscription_is_active(user)):
-        st.write(f"套餐金额：{config.amount_cny} 元")
-        st.code(payment_reference(user.id, user.email), language=None)
+        st.markdown(
+            f"""
+            <div class="membership-panel">
+                <div class="membership-tier">
+                    <div class="membership-name">月度会员</div>
+                    <div class="membership-price">9.99 元 / 月</div>
+                    <div class="membership-desc">股票池单次最多扫描 100 只股票，备选池最多加入 20 只股票。</div>
+                </div>
+                <div class="membership-tier">
+                    <div class="membership-name">年度会员</div>
+                    <div class="membership-price">99.99 元 / 年</div>
+                    <div class="membership-desc">无限制使用股票池扫描、备选池和完整工作台功能。</div>
+                </div>
+                <div class="membership-tier">
+                    <div class="membership-name">永久会员</div>
+                    <div class="membership-price">1999 元</div>
+                    <div class="membership-desc">一次开通，永久使用。</div>
+                </div>
+            </div>
+            <div class="membership-note">转账时请备注自己的邮箱账号：<b>{html.escape(user.email)}</b></div>
+            """,
+            unsafe_allow_html=True,
+        )
         qr_images = payment_qr_images(config)
         if qr_images:
             qr_cols = st.columns(min(2, len(qr_images)), gap="medium")
@@ -222,7 +244,6 @@ def render_account_panel(user: User) -> None:
             st.info("收款码暂未配置。上线收费时设置 STOCKBUYORNOT_ALIPAY_QR_URL 或 STOCKBUYORNOT_WECHATPAY_QR_URL 即可显示二维码。")
         if config.support_contact:
             st.caption(f"付款后联系：{config.support_contact}")
-        st.caption("正式接入微信/支付宝后，支付回调只需要把用户 subscription_status 更新为 active。")
 
 
 def render_admin_panel() -> None:
@@ -1184,157 +1205,6 @@ def render_usage_reference_section() -> None:
             """
         )
 
-    with st.expander("本地启动与常用命令", expanded=False):
-        st.markdown(
-            """
-            当前推荐环境：
-
-            ```text
-            C:\\ProgramData\\Anaconda3\\envs\\tower312
-            ```
-
-            在项目目录启动工作台：
-
-            ```powershell
-            cd C:\\Users\\pro6a\\Documents\\stockbuyornot
-            .\\workbench.cmd
-            ```
-
-            打开地址：
-
-            ```text
-            http://127.0.0.1:8501
-            ```
-
-            如果打不开，或浏览器提示 `127.0.0.1 拒绝连接`：
-
-            ```powershell
-            .\\restart_workbench.cmd
-            ```
-
-            命令行单票分析：
-
-            ```powershell
-            .\\stockbuyornot.cmd analyze --symbol 000001 --start 20240101 --end 20260517
-            ```
-
-            命令行股票扫描：
-
-            ```powershell
-            .\\stockbuyornot.cmd scan --symbols 000001 600519 300750 --start 20240101 --end 20260517 --min-score 60
-            ```
-
-            导出扫描结果：
-
-            ```powershell
-            .\\stockbuyornot.cmd scan --symbols 000001 600519 300750 --start 20240101 --end 20260517 --min-score 60 --output candidates.csv
-            ```
-            """
-        )
-
-    with st.expander("本地 CSV 数据", expanded=False):
-        st.markdown(
-            """
-            单个 CSV 文件分析：
-
-            ```powershell
-            .\\stockbuyornot.cmd analyze --csv data\\daily\\000001.csv
-            ```
-
-            文件夹扫描：
-
-            ```powershell
-            .\\stockbuyornot.cmd scan --csv-dir data\\daily --start 20240101 --end 20260517 --min-score 70 --output candidates.csv
-            ```
-
-            CSV 至少包含：
-
-            ```text
-            date,open,high,low,close,volume
-            ```
-
-            推荐包含：
-
-            ```text
-            amount,symbol
-            ```
-            """
-        )
-
-    with st.expander("回测与组合回测", expanded=False):
-        st.markdown(
-            """
-            单票回测：
-
-            ```powershell
-            .\\stockbuyornot.cmd backtest --symbol 000001 --start 20200101 --end 20260517
-            ```
-
-            组合回测入口主要用于评估“第二阶段主升 + 缩量回踩 + 上涨中继买点”的股票池级别收益。
-
-            小股票池测试：
-
-            ```powershell
-            .\\stockbuyornot.cmd portfolio-backtest --symbols 000001 600519 300750 --start 20240101 --end 20260517 --output candidate\\trend_pullback_test.csv
-            ```
-
-            指数股票池：
-
-            ```powershell
-            .\\stockbuyornot.cmd portfolio-backtest --pool sse50 --start 20240101 --end 20260517 --max-positions 5 --output candidate\\sse50_trend_pullback.csv
-            .\\stockbuyornot.cmd portfolio-backtest --pool csi300 --start 20240101 --end 20260517 --max-positions 5 --output candidate\\csi300_trend_pullback.csv
-            .\\stockbuyornot.cmd portfolio-backtest --pool csi500 --start 20240101 --end 20260517 --max-positions 5 --output candidate\\csi500_trend_pullback.csv
-            .\\stockbuyornot.cmd portfolio-backtest --pool chinext --start 20240101 --end 20260517 --max-positions 5 --output candidate\\chinext_trend_pullback.csv
-            ```
-
-            常用参数：
-
-            ```powershell
-            --market-mode balanced
-            --max-positions 5
-            --neutral-max-positions 2
-            --min-score 75
-            --min-avg-amount 50000000
-            --max-stop-distance 0.07
-            --min-relative-strength 0.03
-            --min-reward-risk 1.8
-            --breakeven-r 1.0
-            --trail-start-r 2.0
-            --trail-pct 0.10
-            --stale-days 12
-            --max-holding-days 45
-            ```
-            """
-        )
-
-    with st.expander("跟随交易", expanded=False):
-        st.markdown(
-            """
-            跟随交易页用于开盘前根据美股、韩股前一晚涨跌，映射 A 股上游企业。
-
-            使用方式：
-
-            ```text
-            1. 选择“自动选强势股”，刷新近期美股/韩股观察池。
-            2. 勾选要跟随的海外标的；美股会自动计算近期涨幅和前一交易日涨跌幅。
-            3. 韩股当前作为重点观察池展示，可在表格里手动补充涨跌幅。
-            4. 选择用“前一交易日涨跌幅”或“最近涨幅”生成跟随信号。
-            5. 程序根据内置产业链映射生成 A 股候选。
-            6. 可勾选“叠加A股量价诊断”，过滤掉量价结构较弱的标的。
-            7. 下载 follow_trade_candidates.csv 作为开盘观察清单。
-            ```
-
-            注意：
-
-            ```text
-            跟随交易只生成观察清单，不自动下单。
-            若A股高开超过5%不追；开盘后跌破开盘价且放量，应放弃跟随。
-            映射表是研究辅助，后续需要定期维护产业链关系。
-            ```
-            """
-        )
-
-
 def usage_card(step: str, title: str, text: str) -> str:
     return f"""
     <div class="usage-card">
@@ -2126,14 +1996,14 @@ def inject_css() -> None:
         h1 { font-size: 2.25rem; line-height: 1.15; margin-bottom: 0.75rem; }
         h3 { margin-top: 0.7rem; margin-bottom: 0.75rem; }
         .brand-header {
-            margin: 0 0 1.15rem;
-            padding: 18px 0 6px;
-            max-width: 1120px;
+            margin: 0 0 0.95rem;
+            padding: 10px 0 4px;
+            max-width: 760px;
         }
         .brand-header h1 {
             margin: 0 0 8px;
             color: #0f172a;
-            font-size: clamp(2.1rem, 4vw, 4.2rem);
+            font-size: clamp(2.35rem, 4.6vw, 4.6rem);
             line-height: 1.04;
             font-weight: 800;
             letter-spacing: 0;
@@ -2151,7 +2021,7 @@ def inject_css() -> None:
             font-size: 0.98rem;
             font-style: italic;
             line-height: 1.75;
-            max-width: 1080px;
+            max-width: 760px;
         }
         .auth-heading {
             margin: 8vh 0 1rem;
@@ -2176,6 +2046,47 @@ def inject_css() -> None:
             font-size: 0.9rem;
             font-style: italic;
             line-height: 1.65;
+        }
+        .membership-panel {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+            margin: 4px 0 12px;
+        }
+        .membership-tier {
+            border: 1px solid #dbe3ef;
+            border-radius: 8px;
+            background: #ffffff;
+            padding: 12px 14px;
+        }
+        .membership-name {
+            color: #0f172a;
+            font-size: 0.96rem;
+            font-weight: 750;
+            line-height: 1.25;
+        }
+        .membership-price {
+            color: #b91c1c;
+            font-size: 1.08rem;
+            font-weight: 800;
+            line-height: 1.3;
+            margin-top: 4px;
+        }
+        .membership-desc {
+            color: #475569;
+            font-size: 0.84rem;
+            line-height: 1.5;
+            margin-top: 4px;
+        }
+        .membership-note {
+            border: 1px solid #fde68a;
+            border-radius: 8px;
+            background: #fffbeb;
+            color: #92400e;
+            font-size: 0.88rem;
+            line-height: 1.5;
+            padding: 10px 12px;
+            margin: 2px 0 14px;
         }
         .metric-card {
             min-height: 112px;
@@ -2289,6 +2200,8 @@ def inject_css() -> None:
         div[data-testid="stDataFrame"] { border: 1px solid #e2e8f0; border-radius: 8px; }
         @media (max-width: 1100px) {
             .block-container { padding-left: 1rem; padding-right: 1rem; }
+            .brand-header { max-width: 100%; padding-top: 4px; }
+            .brand-header h1 { font-size: 2.35rem; }
             .metric-card { min-height: 92px; padding: 12px 14px; }
             .metric-value { font-size: 1.45rem; }
             .market-status-card { min-height: auto; }
