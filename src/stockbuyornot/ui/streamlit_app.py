@@ -1487,10 +1487,7 @@ def metric_card(label: str, value: str, note: str | None = None, tooltip: str | 
 def render_market_status_widget(settings: dict) -> None:
     token_key = "market_status_refresh_token"
     st.session_state.setdefault(token_key, 0)
-    button_cols = st.columns([0.54, 0.46], gap="small")
-    button_cols[0].caption("大盘状态")
-    if button_cols[1].button("刷新大盘", key="refresh_market_status", use_container_width=True):
-        st.session_state[token_key] += 1
+    st.caption("大盘状态")
     index_symbol = st.selectbox(
         "参考指数",
         list(MARKET_INDEX_OPTIONS.keys()),
@@ -1522,6 +1519,11 @@ def render_market_status_widget(settings: dict) -> None:
             "hint": f"大盘数据暂时不可用：{exc}",
         }
     st.markdown(market_status_card(snapshot), unsafe_allow_html=True)
+    refresh_cols = st.columns([0.55, 0.45], gap="small")
+    with refresh_cols[1]:
+        if st.button("刷新大盘", key="refresh_market_status", use_container_width=True):
+            st.session_state[token_key] += 1
+            st.rerun()
 
 
 @st.cache_data(ttl=900, show_spinner=False)
