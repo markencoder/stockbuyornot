@@ -9,7 +9,10 @@ from stockbuyornot.auth import (
     data_root,
     database_path,
     downgrade_expired_memberships,
+    get_user_by_email,
     hash_password,
+    is_admin_user,
+    is_disabled_user,
     is_member_user,
     sanitize_user_key,
     subscription_is_active,
@@ -106,6 +109,29 @@ def test_member_usage_is_unlimited(tmp_path: Path):
         assert allowed
         assert used == 0
         assert limit == 10
+
+
+def test_disabled_user_cannot_authenticate_or_use_features(tmp_path: Path):
+    db_path = tmp_path / "app.db"
+    user = create_user("disabled@example.com", "strong-pass-123", db_path=db_path)
+
+    update_subscription_status(user.id, "disabled", db_path=db_path)
+    disabled = authenticate_user("disabled@example.com", "strong-pass-123", db_path)
+
+    assert disabled is None
+    stored = create_user("other@example.com", "strong-pass-123", db_path=db_path)
+    update_subscription_status(stored.id, "disabled", db_path=db_path)
+    stored = get_user_by_email("other@example.com", db_path)
+    assert stored is not None
+    assert is_disabled_user(stored)
+    assert not is_admin_user(stored)
+    assert not is_member_user(stored)
+    assert not subscription_is_active(stored)
+    assert user_tier(stored) == "disabled"
+    allowed, used, limit = consume_trial_usage(stored, "single_diagnosis", db_path=db_path)
+    assert not allowed
+    assert used == 0
+    assert limit == 10
 
 
 def test_sanitize_user_key_keeps_user_storage_path_safe():

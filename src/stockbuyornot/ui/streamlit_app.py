@@ -21,6 +21,7 @@ from stockbuyornot.auth import (
     get_user_by_id,
     initialize_auth_db,
     is_admin_user,
+    is_disabled_user,
     is_member_user,
     list_users,
     sanitize_user_key,
@@ -131,6 +132,10 @@ def render_auth_gate() -> User | None:
     if user_id:
         user = get_user_by_id(int(user_id))
         if user is not None:
+            if is_disabled_user(user):
+                st.session_state.pop("auth_user_id", None)
+                st.error("这个账号已被禁用，请联系管理员。")
+                return None
             return user
         st.session_state.pop("auth_user_id", None)
 
@@ -157,7 +162,11 @@ def render_auth_gate() -> User | None:
                 if submitted:
                     user = authenticate_user(email, password)
                     if user is None:
-                        st.error("邮箱或密码不正确。")
+                        target = get_user_by_email(email)
+                        if target is not None and is_disabled_user(target):
+                            st.error("这个账号已被禁用，请联系管理员。")
+                        else:
+                            st.error("邮箱或密码不正确。")
                     else:
                         st.session_state["auth_user_id"] = user.id
                         st.rerun()
@@ -202,6 +211,7 @@ def render_account_panel(user: User) -> None:
         "active": "会员有效",
         "admin": "管理员",
         "expired": "已过期",
+        "disabled": "已禁用",
     }.get(user.subscription_status, user.subscription_status)
     if is_admin_user(user):
         status_label = "管理员"
@@ -250,7 +260,7 @@ def render_account_panel(user: User) -> None:
 
 
 def render_admin_panel() -> None:
-    status_options = ["trial", "active", "admin"]
+    status_options = ["trial", "active", "admin", "disabled"]
     with st.expander("管理员后台", expanded=False):
         st.caption("按邮箱开通、取消或调整会员状态。")
         with st.form("admin_subscription_form"):
@@ -324,6 +334,9 @@ def consume_feature_use(feature: str, feature_label: str) -> bool:
     user = current_user()
     if user is None:
         return True
+    if is_disabled_user(user):
+        st.warning("这个账号已被禁用，无法使用任何功能。")
+        return False
     allowed, used, limit = consume_trial_usage(user, feature)
     if allowed:
         if user_tier(user) == "trial" and limit is not None:
@@ -335,6 +348,9 @@ def consume_feature_use(feature: str, feature_label: str) -> bool:
 
 def can_save_limited_record(kind: str, records: list[dict], symbol: str, label: str) -> bool:
     user = current_user()
+    if user is not None and is_disabled_user(user):
+        st.warning("这个账号已被禁用，无法保存内容。")
+        return False
     if user is None or is_member_user(user):
         return True
     limit = trial_storage_limit(kind)

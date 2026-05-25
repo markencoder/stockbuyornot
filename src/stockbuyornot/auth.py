@@ -17,6 +17,7 @@ PASSWORD_ITERATIONS = 260_000
 MEMBER_STATUSES = {"active", "member"}
 ADMIN_STATUS = "admin"
 TRIAL_STATUS = "trial"
+DISABLED_STATUS = "disabled"
 TRIAL_DAILY_LIMITS = {
     "single_diagnosis": 10,
     "stock_pool_scan": 3,
@@ -173,7 +174,10 @@ def authenticate_user(email: str, password: str, db_path: Path | None = None) ->
         ).fetchone()
     if row is None or not verify_password(password, str(row["password_hash"])):
         return None
-    return _row_to_user(row)
+    user = _row_to_user(row)
+    if is_disabled_user(user):
+        return None
+    return user
 
 
 def get_user_by_id(user_id: int, db_path: Path | None = None) -> User | None:
@@ -251,18 +255,30 @@ def admin_emails_from_env() -> set[str]:
 
 
 def is_admin_user(user: User) -> bool:
+    if is_disabled_user(user):
+        return False
     return user.subscription_status == ADMIN_STATUS or normalize_email(user.email) in admin_emails_from_env()
 
 
+def is_disabled_user(user: User) -> bool:
+    return user.subscription_status == DISABLED_STATUS
+
+
 def is_member_user(user: User) -> bool:
+    if is_disabled_user(user):
+        return False
     return is_admin_user(user) or user.subscription_status in MEMBER_STATUSES
 
 
 def subscription_is_active(user: User) -> bool:
+    if is_disabled_user(user):
+        return False
     return is_admin_user(user) or user.subscription_status in MEMBER_STATUSES | {TRIAL_STATUS}
 
 
 def user_tier(user: User) -> str:
+    if is_disabled_user(user):
+        return "disabled"
     if is_admin_user(user):
         return "admin"
     if user.subscription_status in MEMBER_STATUSES:
@@ -306,6 +322,8 @@ def consume_trial_usage(
     db_path: Path | None = None,
 ) -> tuple[bool, int, int | None]:
     limit = trial_daily_limit(feature)
+    if is_disabled_user(user):
+        return False, 0, limit
     if user_tier(user) != "trial" or limit is None:
         return True, 0, limit
 
