@@ -33,7 +33,10 @@ from stockbuyornot.ui.streamlit_app import (
     watchlist_trade_tier,
     update_watchlist_manual_prices,
     build_intraday_adjustment_from_watchlist_record,
+    group_intraday_watchlist_records,
+    intraday_chart_points_from_df,
     intraday_confirmation_to_record,
+    intraday_record_group,
     watchlist_intraday_summary_row,
 )
 from stockbuyornot.intraday import IntradaySummary
@@ -548,6 +551,46 @@ def test_watchlist_intraday_summary_row_uses_saved_confirmation():
     assert row["盘中短线参考"] == 76
 
 
+def test_intraday_records_are_grouped_by_execution_state():
+    records = [
+        {"symbol": "000001", "candidate_score": 80, "intraday_confirmation": {"action_level": "support"}},
+        {"symbol": "000002", "candidate_score": 70, "intraday_confirmation": {"action_level": "neutral"}},
+        {"symbol": "000003", "candidate_score": 60, "intraday_confirmation": {"action_level": "risk"}},
+        {"symbol": "000004", "candidate_score": 50},
+    ]
+
+    grouped = group_intraday_watchlist_records(records)
+
+    assert intraday_record_group(records[0]) == "support"
+    assert intraday_record_group(records[1]) == "watch"
+    assert intraday_record_group(records[2]) == "risk"
+    assert intraday_record_group(records[3]) == "unupdated"
+    assert [item["symbol"] for item in grouped["support"]] == ["000001"]
+    assert [item["symbol"] for item in grouped["watch"]] == ["000002"]
+    assert [item["symbol"] for item in grouped["risk"]] == ["000003"]
+    assert [item["symbol"] for item in grouped["unupdated"]] == ["000004"]
+
+
+def test_intraday_chart_points_include_vwap():
+    frame = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-05-25 09:30", "2026-05-25 09:35", "2026-05-25 09:40"]),
+            "open": [10.0, 10.1, 10.2],
+            "high": [10.2, 10.3, 10.4],
+            "low": [9.9, 10.0, 10.1],
+            "close": [10.1, 10.2, 10.3],
+            "volume": [100, 200, 300],
+            "amount": [1010, 2040, 3090],
+        }
+    )
+
+    points = intraday_chart_points_from_df(frame)
+
+    assert len(points) == 3
+    assert points[-1]["close"] == 10.3
+    assert points[-1]["vwap"] is not None
+
+
 def test_build_intraday_adjustment_from_watchlist_record_uses_daily_scores():
     summary = IntradaySummary(
         symbol="000001",
@@ -574,11 +617,12 @@ def test_build_intraday_adjustment_from_watchlist_record_uses_daily_scores():
     }
 
     adjustment = build_intraday_adjustment_from_watchlist_record(record, summary)
-    saved = intraday_confirmation_to_record(summary, adjustment, "5", "2026-05-25 10:31:00")
+    saved = intraday_confirmation_to_record(summary, adjustment, "5", "2026-05-25 10:31:00", chart_points=[{"date": "2026-05-25 10:30:00", "close": 12.3, "vwap": 12.0}])
 
     assert adjustment.base_liangjia_score == 70
     assert adjustment.base_short_term_score == 66
     assert saved["period"] == "5"
+    assert saved["chart_points"][0]["vwap"] == 12.0
     assert saved["adjusted_short_term_score"] >= 66
 
 

@@ -2430,9 +2430,26 @@ def render_watchlist_intraday_tab(settings: dict, provider: AkshareProvider) -> 
     stat_cols[2].markdown(metric_card("提示风险", str(risk_count), "分时转弱"), unsafe_allow_html=True)
     stat_cols[3].markdown(metric_card("未更新", str(no_data_count), "需要读取分时"), unsafe_allow_html=True)
 
-    st.dataframe(style_intraday_watchlist_summary(summary), use_container_width=True, hide_index=True)
+    grouped_records = group_intraday_watchlist_records(records)
+    grouped_rows = {key: pd.DataFrame([watchlist_intraday_summary_row(record) for record in items]) for key, items in grouped_records.items()}
+    group_tabs = st.tabs([f"{label}（{len(grouped_records[key])}）" for key, label in intraday_group_labels().items()])
+    for tab, (key, label) in zip(group_tabs, intraday_group_labels().items()):
+        with tab:
+            frame = grouped_rows[key]
+            if frame.empty:
+                st.info(f"当前没有「{label}」股票。")
+            else:
+                st.dataframe(style_intraday_watchlist_summary(frame), use_container_width=True, hide_index=True)
+                st.download_button(
+                    f"下载{label}CSV",
+                    data=frame.to_csv(index=False, encoding="utf-8-sig"),
+                    file_name=f"watchlist_intraday_{key}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    key=f"download_intraday_{key}",
+                )
     st.download_button(
-        "下载盘中确认CSV",
+        "下载全部盘中确认CSV",
         data=summary.to_csv(index=False, encoding="utf-8-sig"),
         file_name="watchlist_intraday_confirmation.csv",
         mime="text/csv",
@@ -2440,12 +2457,19 @@ def render_watchlist_intraday_tab(settings: dict, provider: AkshareProvider) -> 
     )
 
     st.markdown("**逐股盘中确认详情**")
-    for record in records:
-        conf = record.get("intraday_confirmation") or {}
-        symbol = record.get("symbol", "")
-        title = f"{symbol} | {record.get('short_term_view', {}).get('advice', record.get('suggestion', '-'))} | {conf.get('action', '尚未读取分时')}"
-        with st.expander(title, expanded=False):
-            render_watchlist_intraday_detail(record)
+    detail_tabs = st.tabs([f"{label}详情（{len(grouped_records[key])}）" for key, label in intraday_group_labels().items()])
+    for tab, (key, label) in zip(detail_tabs, intraday_group_labels().items()):
+        with tab:
+            items = grouped_records[key]
+            if not items:
+                st.info(f"当前没有「{label}」股票。")
+                continue
+            for record in items:
+                conf = record.get("intraday_confirmation") or {}
+                symbol = record.get("symbol", "")
+                title = f"{symbol} | {record.get('short_term_view', {}).get('advice', record.get('suggestion', '-'))} | {conf.get('action', '尚未读取分时')}"
+                with st.expander(title, expanded=False):
+                    render_watchlist_intraday_detail(record)
 
 
 def refresh_watchlist_intraday_records(
@@ -2473,7 +2497,8 @@ def refresh_watchlist_intraday_records(
             df = load_intraday_data(provider, symbol, period, lookback_days)
             summary = summarize_intraday(df, symbol=symbol)
             adjustment = build_intraday_adjustment_from_watchlist_record(record, summary)
-            updated["intraday_confirmation"] = intraday_confirmation_to_record(summary, adjustment, period, now_text)
+            chart_points = intraday_chart_points_from_df(df)
+            updated["intraday_confirmation"] = intraday_confirmation_to_record(summary, adjustment, period, now_text, chart_points=chart_points)
             updated["intraday_error"] = ""
             updated["intraday_updated_at"] = now_text
         except Exception as exc:
@@ -2509,6 +2534,7 @@ def intraday_confirmation_to_record(
     adjustment: IntradayAdjustment,
     period: str,
     updated_at: str,
+    chart_points: list[dict] | None = None,
 ) -> dict:
     return {
         "period": str(period),
@@ -2537,7 +2563,45 @@ def intraday_confirmation_to_record(
         "risk_flags": adjustment.risk_flags,
         "formula": adjustment.formula,
         "explanation": adjustment.explanation,
+        "chart_points": chart_points or [],
     }
+
+
+def intraday_chart_points_from_df(df: pd.DataFrame) -> list[dict]:
+    data = df.copy()
+    if data.empty:
+        return []
+    data["date"] = pd.to_datetime(data["date"])
+    data = data.sort_values("date").reset_index(drop=True)
+    latest_day = data["date"].dt.date.iloc[-1]
+    data = data[data["date"].dt.date == latest_day].copy()
+    if data.empty:
+        return []
+    close = pd.to_numeric(data["close"], errors="coerce")
+    vwap = pd.Series([pd.NA] * len(data), index=data.index, dtype="Float64")
+    if {"amount", "volume"}.issubset(data.columns) and data["amount"].notna().any():
+        cum_volume = pd.to_numeric(data["volume"], errors="coerce").cumsum()
+        cum_amount = pd.to_numeric(data["amount"], errors="coerce").cumsum()
+        vwap = cum_amount / cum_volume.replace(0, pd.NA)
+        latest_close = _score_value(close.iloc[-1], 0.0)
+        latest_vwap = _score_value(vwap.dropna().iloc[-1], 0.0) if not vwap.dropna().empty else 0.0
+        if latest_close > 0 and latest_vwap > latest_close * 20:
+            vwap = vwap / 100.0
+    points: list[dict] = []
+    for index, row in data.iterrows():
+        close_value = _score_value(close.loc[index], None)
+        if close_value is None:
+            continue
+        vwap_value = _score_value(vwap.loc[index], None) if index in vwap.index else None
+        points.append(
+            {
+                "date": pd.to_datetime(row["date"]).strftime("%Y-%m-%d %H:%M:%S"),
+                "close": close_value,
+                "vwap": vwap_value,
+                "volume": _score_value(row.get("volume"), 0.0),
+            }
+        )
+    return points
 
 
 def watchlist_intraday_summary_row(record: dict) -> dict:
@@ -2563,6 +2627,38 @@ def watchlist_intraday_summary_row(record: dict) -> dict:
         "分时更新时间": conf.get("updated_at", record.get("intraday_updated_at", "")),
         "错误": record.get("intraday_error", ""),
     }
+
+
+def intraday_group_labels() -> dict[str, str]:
+    return {
+        "support": "支持执行",
+        "watch": "等待观察",
+        "risk": "提示风险",
+        "unupdated": "未更新",
+    }
+
+
+def intraday_record_group(record: dict) -> str:
+    if record.get("intraday_error"):
+        return "risk"
+    conf = record.get("intraday_confirmation") or {}
+    if not conf:
+        return "unupdated"
+    level = str(conf.get("action_level") or "")
+    if level == "support":
+        return "support"
+    if level == "risk":
+        return "risk"
+    return "watch"
+
+
+def group_intraday_watchlist_records(records: list[dict]) -> dict[str, list[dict]]:
+    grouped = {key: [] for key in intraday_group_labels()}
+    for record in records:
+        grouped[intraday_record_group(record)].append(record)
+    for key in grouped:
+        grouped[key] = sorted(grouped[key], key=watchlist_sort_score, reverse=True)
+    return grouped
 
 
 def style_intraday_watchlist_summary(summary: pd.DataFrame):
@@ -2601,6 +2697,7 @@ def render_watchlist_intraday_detail(record: dict) -> None:
     summary_cols[2].markdown(metric_card("日内位置", _pct_text(conf.get("range_position_pct")), "越接近100%越靠近日内高位"), unsafe_allow_html=True)
     summary_cols[3].markdown(metric_card("尾盘量比", _ratio_text(conf.get("volume_ratio")), conf.get("volume_label", "")), unsafe_allow_html=True)
     summary_cols[4].markdown(metric_card("执行提示", conf.get("action", "-")), unsafe_allow_html=True)
+    render_watchlist_intraday_vwap_chart(record)
     st.info(str(conf.get("summary_explanation", "")))
     st.write(str(conf.get("explanation", "")))
     st.caption(str(conf.get("formula", "")))
@@ -2609,6 +2706,45 @@ def render_watchlist_intraday_detail(record: dict) -> None:
     detail_cols[0].write("；".join(conf.get("support_flags") or []) or "暂无明显分时支持项。")
     detail_cols[1].markdown("**分时风险依据**")
     detail_cols[1].write("；".join(conf.get("risk_flags") or []) or "暂无明显分时风险项。")
+
+
+def render_watchlist_intraday_vwap_chart(record: dict) -> None:
+    conf = record.get("intraday_confirmation") or {}
+    points = conf.get("chart_points") or []
+    if not points:
+        st.info("暂无可绘制的分时/VWAP图。请重新点击“一键更新盘中修正”，系统会保存图表点位。")
+        return
+    data = pd.DataFrame(points)
+    if data.empty or "date" not in data.columns or "close" not in data.columns:
+        return
+    data["date"] = pd.to_datetime(data["date"], errors="coerce")
+    close_rows = data[["date", "close"]].rename(columns={"close": "value"}).copy()
+    close_rows["type"] = "分时价格"
+    chart_rows = [close_rows]
+    if "vwap" in data.columns and data["vwap"].notna().any():
+        vwap_rows = data[["date", "vwap"]].rename(columns={"vwap": "value"}).dropna(subset=["value"]).copy()
+        vwap_rows["type"] = "VWAP"
+        chart_rows.append(vwap_rows)
+    chart_data = pd.concat(chart_rows, ignore_index=True).dropna(subset=["date", "value"])
+    if chart_data.empty:
+        return
+    title = f"{record.get('symbol', '')} {conf.get('period', '-') }分钟分时价格 / VWAP"
+    chart = (
+        alt.Chart(chart_data)
+        .mark_line(point=False)
+        .encode(
+            x=alt.X("date:T", title="时间", axis=alt.Axis(format="%H:%M", labelAngle=0)),
+            y=alt.Y("value:Q", title="价格", scale=alt.Scale(zero=False)),
+            color=alt.Color("type:N", title=""),
+            tooltip=[
+                alt.Tooltip("date:T", title="时间", format="%H:%M"),
+                alt.Tooltip("type:N", title="类型"),
+                alt.Tooltip("value:Q", title="价格", format=".2f"),
+            ],
+        )
+        .properties(title=title, height=300)
+    )
+    st.altair_chart(chart, use_container_width=True)
 
 
 def _pct_text(value, multiplier: float = 100.0) -> str:
