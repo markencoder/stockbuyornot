@@ -32,7 +32,11 @@ from stockbuyornot.ui.streamlit_app import (
     watchlist_plan_row,
     watchlist_trade_tier,
     update_watchlist_manual_prices,
+    build_intraday_adjustment_from_watchlist_record,
+    intraday_confirmation_to_record,
+    watchlist_intraday_summary_row,
 )
+from stockbuyornot.intraday import IntradaySummary
 from stockbuyornot.models import Stage
 
 
@@ -511,6 +515,71 @@ def test_watchlist_trade_plan_blocks_high_risk_candidate():
 
     assert watchlist_trade_tier(record) == "C-先剔除"
     assert "分时不能单独改成买入" in watchlist_intraday_rule(record)
+
+
+def test_watchlist_intraday_summary_row_uses_saved_confirmation():
+    record = {
+        "symbol": "000001",
+        "candidate_score": 72,
+        "short_term_view": {"advice": "短期等待", "short_term_score": 68, "liangjia_score": 70},
+        "factor_scores": {"short_term_score": 68, "liangjia_score": 70},
+        "intraday_confirmation": {
+            "period": "5",
+            "latest_price": 12.34,
+            "session_return_pct": 0.0123,
+            "momentum_30m_pct": 0.004,
+            "range_position_pct": 0.82,
+            "volume_ratio": 1.35,
+            "conclusion": "分时支持偏多",
+            "adjusted_short_term_score": 76,
+            "adjusted_liangjia_score": 74,
+            "action": "盘中支持执行",
+            "updated_at": "2026-05-25 10:30:00",
+        },
+    }
+
+    row = watchlist_intraday_summary_row(record)
+
+    assert row["代码"] == "000001"
+    assert row["候选分"] == 72
+    assert row["最新价"] == "12.34"
+    assert row["当日涨跌"] == "1.23%"
+    assert row["日内位置"] == "82.00%"
+    assert row["盘中短线参考"] == 76
+
+
+def test_build_intraday_adjustment_from_watchlist_record_uses_daily_scores():
+    summary = IntradaySummary(
+        symbol="000001",
+        latest_time=pd.Timestamp("2026-05-25 10:30:00"),
+        latest_price=12.3,
+        session_return_pct=0.012,
+        momentum_30m_pct=0.004,
+        range_position_pct=0.8,
+        volume_ratio=1.4,
+        vwap=12.0,
+        vwap_gap_pct=0.025,
+        trend_label="盘中偏强",
+        volume_label="放量",
+        conclusion="分时支持偏多",
+        explanation="盘中需求较强。",
+    )
+    record = {
+        "short_term_view": {
+            "liangjia_score": 70,
+            "short_term_score": 66,
+            "advice": "短期等待",
+            "signal_direction": "偏多",
+        }
+    }
+
+    adjustment = build_intraday_adjustment_from_watchlist_record(record, summary)
+    saved = intraday_confirmation_to_record(summary, adjustment, "5", "2026-05-25 10:31:00")
+
+    assert adjustment.base_liangjia_score == 70
+    assert adjustment.base_short_term_score == 66
+    assert saved["period"] == "5"
+    assert saved["adjusted_short_term_score"] >= 66
 
 
 def test_parse_watchlist_price_updates_accepts_common_formats():

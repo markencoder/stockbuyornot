@@ -99,8 +99,8 @@ def main() -> None:
     with market_col:
         render_market_status_widget(settings)
 
-    tab_analyze, tab_scan, tab_watchlist, tab_purchased, tab_backtest, tab_follow, tab_data, tab_quick_usage = st.tabs(
-        ["单票诊断", "股票池扫描", "我的备选池", "已购买", "策略回测", "跟随交易", "数据工具", "简明用法"]
+    tab_analyze, tab_scan, tab_watchlist, tab_intraday, tab_purchased, tab_backtest, tab_follow, tab_data, tab_quick_usage = st.tabs(
+        ["单票诊断", "股票池扫描", "我的备选池", "盘中确认", "已购买", "策略回测", "跟随交易", "数据工具", "简明用法"]
     )
     with tab_analyze:
         render_analyze_tab(settings, provider)
@@ -109,6 +109,8 @@ def main() -> None:
             render_scan_tab(settings, provider)
     with tab_watchlist:
         render_watchlist_tab(settings, provider)
+    with tab_intraday:
+        render_watchlist_intraday_tab(settings, provider)
     with tab_purchased:
         render_purchased_tab()
     with tab_backtest:
@@ -2370,6 +2372,245 @@ def render_watchlist_tab(settings: dict, provider: AkshareProvider) -> None:
             if action_cols[1].button("从备选池移除", key=f"remove_watchlist_{record.get('symbol', '')}", use_container_width=True):
                 remove_watchlist_symbol(record.get("symbol", ""))
                 st.rerun()
+
+
+def render_watchlist_intraday_tab(settings: dict, provider: AkshareProvider) -> None:
+    st.subheader("盘中分时确认")
+    records = sort_watchlist_records(load_watchlist_records())
+    if not records:
+        st.info("备选池还是空的。先在单票诊断或股票池扫描里加入股票，盘中确认页会自动读取这些股票。")
+        return
+
+    st.caption("这里批量读取备选池股票的分时数据，用来修正盘中短线参考和盘中量价参考；它不改变日K主结论，也不能单独把回避/卖出信号改成买入。")
+    control_cols = st.columns([0.16, 0.18, 0.24, 0.24, 0.18], gap="medium")
+    period = control_cols[0].selectbox("分时周期", ["1", "5", "15", "30", "60"], index=1, format_func=lambda item: f"{item}分钟", key="watchlist_intraday_period")
+    lookback_days = control_cols[1].slider("回看天数", 1, 30, 10, 1, key="watchlist_intraday_lookback")
+    if control_cols[2].button("一键更新日K基本信息", use_container_width=True, key="intraday_refresh_daily"):
+        updated_count, failed_items = refresh_watchlist_records(settings, provider)
+        if failed_items:
+            st.warning(f"日K基本信息已更新 {updated_count} 只，失败 {len(failed_items)} 只。")
+        else:
+            st.success(f"日K基本信息已更新 {updated_count} 只。")
+        st.rerun()
+    if control_cols[3].button("一键更新盘中修正", type="primary", use_container_width=True, key="intraday_refresh_all"):
+        updated_count, failed_items = refresh_watchlist_intraday_records(records, provider, period, lookback_days)
+        if failed_items:
+            st.warning(f"盘中修正已更新 {updated_count} 只，失败 {len(failed_items)} 只：{'；'.join(f'{symbol}:{reason}' for symbol, reason in failed_items[:4])}")
+        else:
+            st.success(f"盘中修正已更新 {updated_count} 只。")
+        st.rerun()
+    control_cols[4].markdown(metric_card("备选数量", str(len(records)), "来自我的备选池"), unsafe_allow_html=True)
+
+    records = sort_watchlist_records(load_watchlist_records())
+    rows = [watchlist_intraday_summary_row(record) for record in records]
+    summary = pd.DataFrame(rows)
+    support_count = sum(1 for record in records if (record.get("intraday_confirmation") or {}).get("action_level") == "support")
+    watch_count = sum(1 for record in records if (record.get("intraday_confirmation") or {}).get("action_level") in {"watch", "neutral"})
+    risk_count = sum(1 for record in records if (record.get("intraday_confirmation") or {}).get("action_level") == "risk")
+    no_data_count = sum(1 for record in records if not record.get("intraday_confirmation"))
+    stat_cols = st.columns(4, gap="medium")
+    stat_cols[0].markdown(metric_card("支持执行", str(support_count), "分时偏多"), unsafe_allow_html=True)
+    stat_cols[1].markdown(metric_card("等待观察", str(watch_count), "未充分确认"), unsafe_allow_html=True)
+    stat_cols[2].markdown(metric_card("提示风险", str(risk_count), "分时转弱"), unsafe_allow_html=True)
+    stat_cols[3].markdown(metric_card("未更新", str(no_data_count), "需要读取分时"), unsafe_allow_html=True)
+
+    st.dataframe(style_intraday_watchlist_summary(summary), use_container_width=True, hide_index=True)
+    st.download_button(
+        "下载盘中确认CSV",
+        data=summary.to_csv(index=False, encoding="utf-8-sig"),
+        file_name="watchlist_intraday_confirmation.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+    st.markdown("**逐股盘中确认详情**")
+    for record in records:
+        conf = record.get("intraday_confirmation") or {}
+        symbol = record.get("symbol", "")
+        title = f"{symbol} | {record.get('short_term_view', {}).get('advice', record.get('suggestion', '-'))} | {conf.get('action', '尚未读取分时')}"
+        with st.expander(title, expanded=False):
+            render_watchlist_intraday_detail(record)
+
+
+def refresh_watchlist_intraday_records(
+    records: list[dict],
+    provider: AkshareProvider,
+    period: str,
+    lookback_days: int,
+) -> tuple[int, list[tuple[str, str]]]:
+    refreshed_records: list[dict] = []
+    failed_items: list[tuple[str, str]] = []
+    progress = st.progress(0)
+    status = st.empty()
+    now_text = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    for index, record in enumerate(records, start=1):
+        symbol = str(record.get("symbol", "")).strip()
+        status.write(f"正在更新盘中修正 {index}/{len(records)}：{symbol}")
+        updated = dict(record)
+        if not symbol:
+            failed_items.append(("-", "缺少股票代码"))
+            refreshed_records.append(updated)
+            progress.progress(index / max(len(records), 1))
+            continue
+        try:
+            df = load_intraday_data(provider, symbol, period, lookback_days)
+            summary = summarize_intraday(df, symbol=symbol)
+            adjustment = build_intraday_adjustment_from_watchlist_record(record, summary)
+            updated["intraday_confirmation"] = intraday_confirmation_to_record(summary, adjustment, period, now_text)
+            updated["intraday_error"] = ""
+            updated["intraday_updated_at"] = now_text
+        except Exception as exc:
+            updated["intraday_error"] = short_error(exc)
+            updated["intraday_updated_at"] = now_text
+            failed_items.append((symbol, short_error(exc)))
+        refreshed_records.append(updated)
+        progress.progress(index / max(len(records), 1))
+
+    save_watchlist_records(refreshed_records)
+    progress.empty()
+    status.empty()
+    return len(records) - len(failed_items), failed_items
+
+
+def build_intraday_adjustment_from_watchlist_record(record: dict, summary: IntradaySummary) -> IntradayAdjustment:
+    short_view = record.get("short_term_view") or {}
+    factors = record.get("factor_scores") or {}
+    score = record.get("score") or {}
+    base_liangjia = _score_value(short_view.get("liangjia_score"), _score_value(factors.get("liangjia_score"), _score_value(score.get("total"), 0.0)))
+    base_short = _score_value(short_view.get("short_term_score"), _score_value(factors.get("short_term_score"), _score_value(score.get("total"), 0.0)))
+    return compute_intraday_adjustment(
+        summary,
+        base_liangjia_score=base_liangjia,
+        base_short_term_score=base_short,
+        daily_advice=str(short_view.get("advice") or record.get("suggestion") or ""),
+        signal_direction=str(short_view.get("signal_direction") or ""),
+    )
+
+
+def intraday_confirmation_to_record(
+    summary: IntradaySummary,
+    adjustment: IntradayAdjustment,
+    period: str,
+    updated_at: str,
+) -> dict:
+    return {
+        "period": str(period),
+        "updated_at": updated_at,
+        "latest_time": summary.latest_time.strftime("%Y-%m-%d %H:%M:%S"),
+        "latest_price": summary.latest_price,
+        "session_return_pct": summary.session_return_pct,
+        "momentum_30m_pct": summary.momentum_30m_pct,
+        "range_position_pct": summary.range_position_pct,
+        "volume_ratio": summary.volume_ratio,
+        "vwap": summary.vwap,
+        "vwap_gap_pct": summary.vwap_gap_pct,
+        "trend_label": summary.trend_label,
+        "volume_label": summary.volume_label,
+        "conclusion": summary.conclusion,
+        "summary_explanation": summary.explanation,
+        "base_liangjia_score": adjustment.base_liangjia_score,
+        "base_short_term_score": adjustment.base_short_term_score,
+        "liangjia_modifier": adjustment.liangjia_modifier,
+        "short_term_modifier": adjustment.short_term_modifier,
+        "adjusted_liangjia_score": adjustment.adjusted_liangjia_score,
+        "adjusted_short_term_score": adjustment.adjusted_short_term_score,
+        "action": adjustment.action,
+        "action_level": adjustment.action_level,
+        "support_flags": adjustment.support_flags,
+        "risk_flags": adjustment.risk_flags,
+        "formula": adjustment.formula,
+        "explanation": adjustment.explanation,
+    }
+
+
+def watchlist_intraday_summary_row(record: dict) -> dict:
+    short_view = record.get("short_term_view") or {}
+    factors = record.get("factor_scores") or {}
+    conf = record.get("intraday_confirmation") or {}
+    return {
+        "代码": record.get("symbol", ""),
+        "候选分": round(watchlist_sort_score(record)),
+        "日K建议": short_view.get("advice", record.get("suggestion", "")),
+        "日K短期分": round(_score_value(short_view.get("short_term_score"), _score_value(factors.get("short_term_score"), 0.0))),
+        "日K量价分": round(_score_value(short_view.get("liangjia_score"), _score_value(factors.get("liangjia_score"), _score_value((record.get("score") or {}).get("total"), 0.0)))),
+        "周期": f"{conf.get('period', '-') }分钟" if conf.get("period") else "-",
+        "最新价": price_text(conf.get("latest_price")),
+        "当日涨跌": _pct_text(conf.get("session_return_pct")),
+        "30分钟动量": _pct_text(conf.get("momentum_30m_pct")),
+        "日内位置": _pct_text(conf.get("range_position_pct")),
+        "尾盘量比": _ratio_text(conf.get("volume_ratio")),
+        "分时结论": conf.get("conclusion", "-"),
+        "盘中短线参考": "-" if conf.get("adjusted_short_term_score") in [None, ""] else round(float(conf.get("adjusted_short_term_score"))),
+        "盘中量价参考": "-" if conf.get("adjusted_liangjia_score") in [None, ""] else round(float(conf.get("adjusted_liangjia_score"))),
+        "执行提示": conf.get("action", "尚未读取分时"),
+        "分时更新时间": conf.get("updated_at", record.get("intraday_updated_at", "")),
+        "错误": record.get("intraday_error", ""),
+    }
+
+
+def style_intraday_watchlist_summary(summary: pd.DataFrame):
+    def style_row(row) -> list[str]:
+        action = str(row.get("执行提示", ""))
+        error = str(row.get("错误", ""))
+        if error:
+            return ["background-color: #fee2e2; color: #7f1d1d"] * len(row)
+        if any(word in action for word in ["可执行", "支持", "偏多"]):
+            return ["background-color: #dcfce7; color: #14532d"] * len(row)
+        if any(word in action for word in ["风险", "防守", "暂停"]):
+            return ["background-color: #fee2e2; color: #7f1d1d"] * len(row)
+        if any(word in action for word in ["等待", "观察"]):
+            return ["background-color: #fef9c3; color: #713f12"] * len(row)
+        return ["background-color: #f8fafc; color: #334155"] * len(row)
+
+    return summary.style.apply(style_row, axis=1)
+
+
+def render_watchlist_intraday_detail(record: dict) -> None:
+    short_view = record.get("short_term_view") or {}
+    factors = record.get("factor_scores") or {}
+    conf = record.get("intraday_confirmation") or {}
+    daily_cols = st.columns(5, gap="medium")
+    daily_cols[0].markdown(metric_card("候选分", f"{watchlist_sort_score(record):.0f}"), unsafe_allow_html=True)
+    daily_cols[1].markdown(metric_card("日K建议", short_view.get("advice", record.get("suggestion", "-"))), unsafe_allow_html=True)
+    daily_cols[2].markdown(metric_card("日K短期分", f"{_score_value(short_view.get('short_term_score'), _score_value(factors.get('short_term_score'), 0.0)):.0f}"), unsafe_allow_html=True)
+    daily_cols[3].markdown(metric_card("日K量价分", f"{_score_value(short_view.get('liangjia_score'), _score_value(factors.get('liangjia_score'), 0.0)):.0f}"), unsafe_allow_html=True)
+    daily_cols[4].markdown(metric_card("信号方向", short_view.get("signal_direction", "-")), unsafe_allow_html=True)
+    if not conf:
+        st.info("尚未读取分时。请在页面顶部选择周期后点击“一键更新盘中修正”。")
+        return
+    summary_cols = st.columns(5, gap="medium")
+    summary_cols[0].markdown(metric_card("最新价", price_text(conf.get("latest_price")), conf.get("latest_time", "")), unsafe_allow_html=True)
+    summary_cols[1].markdown(metric_card("当日涨跌", _pct_text(conf.get("session_return_pct")), conf.get("trend_label", "")), unsafe_allow_html=True)
+    summary_cols[2].markdown(metric_card("日内位置", _pct_text(conf.get("range_position_pct")), "越接近100%越靠近日内高位"), unsafe_allow_html=True)
+    summary_cols[3].markdown(metric_card("尾盘量比", _ratio_text(conf.get("volume_ratio")), conf.get("volume_label", "")), unsafe_allow_html=True)
+    summary_cols[4].markdown(metric_card("执行提示", conf.get("action", "-")), unsafe_allow_html=True)
+    st.info(str(conf.get("summary_explanation", "")))
+    st.write(str(conf.get("explanation", "")))
+    st.caption(str(conf.get("formula", "")))
+    detail_cols = st.columns(2, gap="large")
+    detail_cols[0].markdown("**分时支持依据**")
+    detail_cols[0].write("；".join(conf.get("support_flags") or []) or "暂无明显分时支持项。")
+    detail_cols[1].markdown("**分时风险依据**")
+    detail_cols[1].write("；".join(conf.get("risk_flags") or []) or "暂无明显分时风险项。")
+
+
+def _pct_text(value, multiplier: float = 100.0) -> str:
+    if value in [None, ""]:
+        return "-"
+    try:
+        return f"{float(value) * multiplier:.2f}%"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _ratio_text(value) -> str:
+    if value in [None, ""]:
+        return "-"
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return "-"
 
 
 def render_watchlist_quick_delete(records: list[dict]) -> None:
