@@ -1,19 +1,23 @@
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from stockbuyornot.auth import (
     authenticate_user,
     consume_trial_usage,
+    create_auth_session,
     create_user,
     data_root,
     database_path,
     downgrade_expired_memberships,
+    get_user_by_session_token,
     get_user_by_email,
     hash_password,
     is_admin_user,
     is_disabled_user,
     is_member_user,
+    revoke_auth_session,
     sanitize_user_key,
     subscription_is_active,
     update_subscription_status,
@@ -132,6 +136,31 @@ def test_disabled_user_cannot_authenticate_or_use_features(tmp_path: Path):
     assert not allowed
     assert used == 0
     assert limit == 10
+
+
+def test_auth_session_restores_user_until_expired(tmp_path: Path):
+    db_path = tmp_path / "app.db"
+    user = create_user("session@example.com", "strong-pass-123", db_path=db_path)
+    now = datetime(2026, 5, 25, 8, 0, tzinfo=timezone.utc)
+
+    token, expires_at = create_auth_session(user.id, db_path=db_path, now=now, duration_hours=12)
+    restored = get_user_by_session_token(token, db_path=db_path, now=now + timedelta(hours=1))
+    expired = get_user_by_session_token(token, db_path=db_path, now=now + timedelta(hours=13))
+
+    assert expires_at.startswith("2026-05-25T20:00:00")
+    assert restored is not None
+    assert restored.email == "session@example.com"
+    assert expired is None
+
+
+def test_revoked_auth_session_cannot_restore_user(tmp_path: Path):
+    db_path = tmp_path / "app.db"
+    user = create_user("logout@example.com", "strong-pass-123", db_path=db_path)
+    token, _ = create_auth_session(user.id, db_path=db_path)
+
+    revoke_auth_session(token, db_path=db_path)
+
+    assert get_user_by_session_token(token, db_path=db_path) is None
 
 
 def test_sanitize_user_key_keeps_user_storage_path_safe():

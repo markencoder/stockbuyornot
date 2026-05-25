@@ -7,13 +7,14 @@ import re
 import secrets
 import sqlite3
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 
 DEFAULT_DATA_DIR = Path("data")
 DEFAULT_DB_PATH = DEFAULT_DATA_DIR / "app.db"
 PASSWORD_ITERATIONS = 260_000
+DEFAULT_SESSION_HOURS = 12.0
 MEMBER_STATUSES = {"active", "member"}
 ADMIN_STATUS = "admin"
 TRIAL_STATUS = "trial"
@@ -90,6 +91,17 @@ def initialize_auth_db(db_path: Path | None = None) -> None:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                token_hash TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_users_subscription_status
             ON users(subscription_status)
             """
@@ -102,6 +114,15 @@ def initialize_auth_db(db_path: Path | None = None) -> None:
             """,
             (TRIAL_STATUS,),
         )
+
+
+def session_hours_from_env() -> float:
+    raw = os.environ.get("STOCKBUYORNOT_SESSION_HOURS", str(DEFAULT_SESSION_HOURS))
+    try:
+        hours = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_SESSION_HOURS
+    return min(max(hours, 0.25), 720.0)
 
 
 def normalize_email(email: str) -> str:
@@ -135,6 +156,10 @@ def verify_password(password: str, stored_hash: str) -> bool:
     except (ValueError, TypeError):
         return False
     return hmac.compare_digest(actual, expected)
+
+
+def hash_session_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def create_user(email: str, password: str, display_name: str = "", db_path: Path | None = None) -> User:
@@ -231,6 +256,69 @@ def update_subscription_status(
             """,
             (status, expires_at, user_id),
         )
+
+
+def create_auth_session(
+    user_id: int,
+    db_path: Path | None = None,
+    *,
+    now: datetime | None = None,
+    duration_hours: float | None = None,
+) -> tuple[str, str]:
+    initialize_auth_db(db_path)
+    issued_at = now or datetime.now(timezone.utc)
+    hours = session_hours_from_env() if duration_hours is None else duration_hours
+    expires_at = issued_at + timedelta(hours=float(hours))
+    token = secrets.token_urlsafe(32)
+    with connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO auth_sessions(token_hash, user_id, expires_at)
+            VALUES (?, ?, ?)
+            """,
+            (hash_session_token(token), int(user_id), expires_at.isoformat()),
+        )
+    return token, expires_at.isoformat()
+
+
+def get_user_by_session_token(
+    token: str | None,
+    db_path: Path | None = None,
+    *,
+    now: datetime | None = None,
+) -> User | None:
+    if not token:
+        return None
+    initialize_auth_db(db_path)
+    downgrade_expired_memberships(db_path)
+    checked_at = now or datetime.now(timezone.utc)
+    token_hash = hash_session_token(str(token))
+    with connect(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT users.*
+            FROM auth_sessions
+            JOIN users ON users.id = auth_sessions.user_id
+            WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?
+            """,
+            (token_hash, checked_at.isoformat()),
+        ).fetchone()
+        if row is None:
+            connection.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (token_hash,))
+            return None
+    user = _row_to_user(row)
+    if is_disabled_user(user):
+        revoke_auth_session(token, db_path)
+        return None
+    return user
+
+
+def revoke_auth_session(token: str | None, db_path: Path | None = None) -> None:
+    if not token:
+        return
+    initialize_auth_db(db_path)
+    with connect(db_path) as connection:
+        connection.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (hash_session_token(str(token)),))
 
 
 def downgrade_expired_memberships(db_path: Path | None = None, today: date | None = None) -> None:

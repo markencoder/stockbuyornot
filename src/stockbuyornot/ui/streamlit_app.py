@@ -15,8 +15,10 @@ from stockbuyornot.auth import (
     User,
     authenticate_user,
     consume_trial_usage,
+    create_auth_session,
     create_user,
     data_root,
+    get_user_by_session_token,
     get_user_by_email,
     get_user_by_id,
     initialize_auth_db,
@@ -25,6 +27,7 @@ from stockbuyornot.auth import (
     is_member_user,
     list_users,
     sanitize_user_key,
+    revoke_auth_session,
     subscription_is_active,
     trial_daily_limit,
     trial_storage_limit,
@@ -77,6 +80,7 @@ BRAND_DESCRIPTION = (
     "帮助用户判断哪些股票正在由弱转强、哪些位置具备更高概率的买入优势、哪些信号提示需求衰竭与风险释放。"
     "我们相信，交易的核心不是猜测未来，而是尊重事实、捕捉变化、跟随概率；让系统替你过滤噪音，让信号帮助你更冷静地接近市场真相。"
 )
+AUTH_QUERY_PARAM = "sbo_session"
 
 
 st.set_page_config(page_title=BRAND_NAME, page_icon="📈", layout="wide")
@@ -133,11 +137,19 @@ def render_auth_gate() -> User | None:
         user = get_user_by_id(int(user_id))
         if user is not None:
             if is_disabled_user(user):
-                st.session_state.pop("auth_user_id", None)
+                clear_auth_session_state()
                 st.error("这个账号已被禁用，请联系管理员。")
                 return None
             return user
         st.session_state.pop("auth_user_id", None)
+
+    token = current_auth_session_token()
+    user = get_user_by_session_token(token)
+    if user is not None:
+        st.session_state["auth_user_id"] = user.id
+        st.session_state["auth_session_token"] = token
+        return user
+    clear_auth_session_state(revoke=False)
 
     _, auth_col, _ = st.columns([1, 0.72, 1])
     with auth_col:
@@ -168,7 +180,7 @@ def render_auth_gate() -> User | None:
                         else:
                             st.error("邮箱或密码不正确。")
                     else:
-                        st.session_state["auth_user_id"] = user.id
+                        start_auth_session(user)
                         st.rerun()
 
             with register_tab:
@@ -183,11 +195,38 @@ def render_auth_gate() -> User | None:
                     except ValueError as exc:
                         st.error(str(exc))
                     else:
-                        st.session_state["auth_user_id"] = user.id
+                        start_auth_session(user)
                         st.success("账号已创建。")
                         st.rerun()
 
     return None
+
+
+def current_auth_session_token() -> str:
+    token = st.session_state.get("auth_session_token")
+    if token:
+        return str(token)
+    value = st.query_params.get(AUTH_QUERY_PARAM, "")
+    if isinstance(value, list):
+        return str(value[0]) if value else ""
+    return str(value or "")
+
+
+def start_auth_session(user: User) -> None:
+    token, _ = create_auth_session(user.id)
+    st.session_state["auth_user_id"] = user.id
+    st.session_state["auth_session_token"] = token
+    st.query_params[AUTH_QUERY_PARAM] = token
+
+
+def clear_auth_session_state(*, revoke: bool = True) -> None:
+    token = current_auth_session_token()
+    if revoke:
+        revoke_auth_session(token)
+    st.session_state.pop("auth_user_id", None)
+    st.session_state.pop("auth_session_token", None)
+    if AUTH_QUERY_PARAM in st.query_params:
+        del st.query_params[AUTH_QUERY_PARAM]
 
 
 def render_brand_header() -> None:
@@ -221,7 +260,7 @@ def render_account_panel(user: User) -> None:
         st.caption(f"到期时间：{user.subscription_expires_at}")
     render_trial_usage_panel(user)
     if st.button("退出登录", use_container_width=True):
-        st.session_state.pop("auth_user_id", None)
+        clear_auth_session_state()
         st.rerun()
 
     with st.expander("会员/付费入口", expanded=not subscription_is_active(user)):
