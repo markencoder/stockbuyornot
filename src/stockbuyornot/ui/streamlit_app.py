@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import html
+import re
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Iterable
@@ -61,6 +62,7 @@ from stockbuyornot.view_engine import stage_label
 
 WATCHLIST_PATH = Path("data/watchlist.json")
 PURCHASED_PATH = Path("data/purchased.json")
+MIN_DAILY_ROWS_FOR_UI_ANALYSIS = 80
 MARKET_INDEX_OPTIONS = {
     "000300": "沪深300",
     "000001": "上证指数",
@@ -852,10 +854,10 @@ def enrich_follow_candidates_with_analysis(
     for index, (_, row) in enumerate(candidates.iterrows(), start=1):
         enriched = row.to_dict()
         if index <= analyze_limit:
-            symbol = str(row["A股代码"]).zfill(6)
+            symbol = normalize_stock_symbol(row["A股代码"])
             status.write(f"正在诊断A股量价 {index}/{scan_count}：{symbol}")
             try:
-                df = provider.daily(symbol, settings["start"], settings["end"], settings["adjust"])
+                df = load_online_daily_data(provider, symbol, settings)
                 result = analyze_for_ui(df, symbol=symbol, benchmark=benchmark)
                 signals = "、".join(signal.name for signal in result.signals)
                 enriched.update(
@@ -925,7 +927,7 @@ def render_data_tab(settings: dict, provider: AkshareProvider) -> None:
                     st.session_state["data_preview_kind"] = "分时"
                     st.session_state["data_preview_period"] = period
                 else:
-                    df = provider.daily(symbol, settings["start"], settings["end"], settings["adjust"])
+                    df = load_online_daily_data(provider, symbol, settings)
                     st.session_state["data_preview_kind"] = "日K"
                     st.session_state["data_preview_period"] = ""
             except Exception as exc:
@@ -957,6 +959,7 @@ def render_data_tab(settings: dict, provider: AkshareProvider) -> None:
 
 
 def load_intraday_data(provider: AkshareProvider, symbol: str, period: str = "5", lookback_days: int = 10) -> pd.DataFrame:
+    symbol = normalize_stock_symbol(symbol)
     if not symbol:
         raise ValueError("请输入股票代码。")
     end = pd.Timestamp.today()
@@ -1278,7 +1281,7 @@ def load_single_data(data_source: str, symbol: str, settings: dict, provider: Ak
     if data_source == "在线A股":
         if not symbol:
             raise ValueError("请输入股票代码。")
-        return provider.daily(symbol, settings["start"], settings["end"], settings["adjust"])
+        return load_online_daily_data(provider, symbol, settings)
     if data_source == "上传CSV":
         if uploaded is None:
             raise ValueError("请先上传 CSV。")
@@ -1318,12 +1321,66 @@ def resolve_scan_sources(source: str, symbols_text: str, pool: str, board_name: 
 def load_scan_data(symbol: str, source_ref: str | Path, settings: dict, provider: AkshareProvider) -> pd.DataFrame:
     if isinstance(source_ref, Path):
         return CsvProvider(source_ref).daily(symbol=symbol, start=settings["start"], end=settings["end"], adjust=settings["adjust"])
-    return provider.daily(symbol, settings["start"], settings["end"], settings["adjust"])
+    return load_online_daily_data(provider, symbol, settings)
 
 
 def parse_symbols(text: str) -> list[str]:
     cleaned = text.replace(",", " ").replace("，", " ").split()
-    return [item.zfill(6) for item in cleaned if item.strip()]
+    return [normalize_stock_symbol(item) for item in cleaned if normalize_stock_symbol(item)]
+
+
+def normalize_stock_symbol(symbol: str | int | float | None) -> str:
+    text = "" if symbol is None else str(symbol).strip().upper()
+    if not text:
+        return ""
+    match = re.search(r"(\d{6})", text)
+    if match:
+        return match.group(1)
+    digits = re.sub(r"\D", "", text)
+    if 1 <= len(digits) <= 6:
+        return digits.zfill(6)
+    return text
+
+
+def load_online_daily_data(
+    provider: AkshareProvider,
+    symbol: str,
+    settings: dict,
+    *,
+    min_rows: int = MIN_DAILY_ROWS_FOR_UI_ANALYSIS,
+) -> pd.DataFrame:
+    normalized_symbol = normalize_stock_symbol(symbol)
+    if not normalized_symbol:
+        raise ValueError("缺少股票代码。")
+
+    start = str(settings.get("start", ""))
+    end = str(settings.get("end", ""))
+    adjust = str(settings.get("adjust", "qfq"))
+    starts = [start]
+    try:
+        expanded_start = warmup_start(start)
+        if expanded_start and expanded_start not in starts:
+            starts.append(expanded_start)
+    except Exception:
+        expanded_start = ""
+
+    first_non_empty: pd.DataFrame | None = None
+    errors: list[str] = []
+    for candidate_start in starts:
+        try:
+            data = provider.daily(normalized_symbol, candidate_start, end, adjust)
+            if not data.empty and len(data) >= min_rows:
+                return data
+            if first_non_empty is None and not data.empty:
+                first_non_empty = data
+            errors.append(f"{candidate_start or '-'}: {len(data)}行")
+        except Exception as exc:
+            errors.append(f"{candidate_start or '-'}: {short_error(exc)}")
+
+    if first_non_empty is not None:
+        return first_non_empty
+    detail = "；".join(errors[-3:]) if errors else "无返回数据"
+    raise RuntimeError(f"在线日K读取失败：{normalized_symbol}，{detail}")
 
 
 def pool_alias(label: str) -> str:
@@ -2525,7 +2582,7 @@ def refresh_watchlist_intraday_records(
     now_text = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
 
     for index, record in enumerate(records, start=1):
-        symbol = str(record.get("symbol", "")).strip()
+        symbol = normalize_stock_symbol(record.get("symbol", ""))
         status.write(f"正在更新盘中修正 {index}/{len(records)}：{symbol}")
         updated = dict(record)
         if not symbol:
@@ -3158,7 +3215,7 @@ def refresh_watchlist_records(settings: dict, provider: AkshareProvider) -> tupl
     now_text = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
 
     for index, record in enumerate(records, start=1):
-        symbol = str(record.get("symbol", "")).strip()
+        symbol = normalize_stock_symbol(record.get("symbol", ""))
         status.write(f"正在更新备选池 {index}/{len(records)}：{symbol}")
         if not symbol:
             failed_items.append(("-", "缺少股票代码"))
@@ -3166,7 +3223,7 @@ def refresh_watchlist_records(settings: dict, provider: AkshareProvider) -> tupl
             progress.progress(index / max(len(records), 1))
             continue
         try:
-            df = provider.daily(symbol, fetch_start, end, adjust)
+            df = load_online_daily_data(provider, symbol, {"start": fetch_start, "end": end, "adjust": adjust})
             sector_benchmark, sector_rs_rank = load_watchlist_record_sector_context(record, provider, settings, benchmark, context_cache)
             sector_name = str((watchlist_record_analysis_context(record).get("sector_name") or "")).strip()
             result = analyze_for_ui(
@@ -3836,7 +3893,7 @@ def load_portfolio_data_for_ui(
             if isinstance(source_ref, Path):
                 data = CsvProvider(source_ref).daily(symbol=symbol, start=fetch_start, end=settings["end"], adjust=settings["adjust"])
             else:
-                data = provider.daily(symbol, fetch_start, settings["end"], settings["adjust"])
+                data = load_online_daily_data(provider, symbol, {"start": fetch_start, "end": settings["end"], "adjust": settings["adjust"]})
             if not data.empty:
                 data_by_symbol[symbol] = data
         except Exception as exc:

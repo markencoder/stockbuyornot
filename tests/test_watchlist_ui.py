@@ -37,7 +37,9 @@ from stockbuyornot.ui.streamlit_app import (
     intraday_chart_points_from_df,
     intraday_confirmation_to_record,
     intraday_record_group,
+    load_online_daily_data,
     load_watchlist_record_sector_context,
+    normalize_stock_symbol,
     watchlist_intraday_summary_row,
     watchlist_record_analysis_context,
 )
@@ -69,6 +71,43 @@ def test_current_user_data_path_uses_persistent_data_root(tmp_path, monkeypatch)
         st.session_state.pop("auth_user_id", None)
 
     assert path == tmp_path / "users" / "trader_vip_example.com" / "watchlist.json"
+
+
+def test_normalize_stock_symbol_accepts_common_saved_formats():
+    assert normalize_stock_symbol("000001.SZ") == "000001"
+    assert normalize_stock_symbol("SH600519") == "600519"
+    assert normalize_stock_symbol("688008.0") == "688008"
+    assert normalize_stock_symbol(651) == "000651"
+
+
+def test_load_online_daily_data_retries_with_warmup_when_initial_range_is_short():
+    class Provider:
+        def __init__(self):
+            self.calls = []
+
+        def daily(self, symbol, start, end, adjust):
+            self.calls.append((symbol, start, end, adjust))
+            rows = 20 if start == "20260101" else 100
+            return pd.DataFrame(
+                {
+                    "date": pd.date_range("2025-01-01", periods=rows, freq="D"),
+                    "open": [10.0] * rows,
+                    "high": [11.0] * rows,
+                    "low": [9.0] * rows,
+                    "close": [10.5] * rows,
+                    "volume": [1000] * rows,
+                    "symbol": [symbol] * rows,
+                }
+            )
+
+    provider = Provider()
+
+    data = load_online_daily_data(provider, "SZ000001", {"start": "20260101", "end": "20260525", "adjust": "qfq"})
+
+    assert len(data) == 100
+    assert provider.calls[0][0] == "000001"
+    assert provider.calls[0][1] == "20260101"
+    assert provider.calls[1][1] < "20260101"
 
 
 def test_compute_market_status_snapshot_identifies_strong_market():
