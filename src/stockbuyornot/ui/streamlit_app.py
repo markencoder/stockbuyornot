@@ -73,7 +73,7 @@ MARKET_INDEX_OPTIONS = {
 
 
 BRAND_NAME = "量价天枢"
-BRAND_SUBTITLE = "基于供需结构识别的量价交易建议软件(Volume-Price Alpha Decision System)"
+BRAND_SUBTITLE = "基于供需结构识别的量价交易评估系统(Volume-Price Alpha Decision System)"
 BRAND_DESCRIPTION = (
     "量价天枢不是一个追逐消息、堆砌指标、主观预测涨跌的软件，而是一套以“价格”和“成交量”为源头数据的市场行为识别系统。"
     "它从当下真实走势出发，通过量价变化、K线形态与关键位置，识别市场背后的供需强弱、资金参与程度与群体情绪变化，"
@@ -157,7 +157,7 @@ def render_auth_gate() -> User | None:
             """
             <div class="auth-heading">
                 <h1>量价天枢</h1>
-                <p>基于供需结构识别的量价交易建议软件(Volume-Price Alpha Decision System)</p>
+                <p>基于供需结构识别的量价交易评估系统(Volume-Price Alpha Decision System)</p>
                 <p class="auth-description">量价天枢以价格和成交量为源头数据，从真实走势出发识别供需强弱、资金参与和风险释放，让系统替你过滤噪音，让信号帮助你更冷静地接近市场真相。</p>
             </div>
             """,

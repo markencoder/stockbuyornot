@@ -1,6 +1,6 @@
 ﻿# 量价天枢
 
-基于供需结构识别的量价交易建议软件(Volume-Price Alpha Decision System)。
+基于供需结构识别的量价交易评估系统(Volume-Price Alpha Decision System)。
 
 量价天枢把日线 OHLCV 数据转换成结构阶段、关键支撑/压力、量价信号、评分、止损与解释，用于研究、复盘和候选股筛选。
 

@@ -1,6 +1,6 @@
 # 量价天枢产品说明书
 
-基于供需结构识别的量价交易建议软件(Volume-Price Alpha Decision System)
+基于供需结构识别的量价交易评估系统(Volume-Price Alpha Decision System)
 
 版本：0.1.0  
 适用对象：股票研究、盘后复盘、候选股筛选、交易计划制定用户  
