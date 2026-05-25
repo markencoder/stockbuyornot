@@ -45,6 +45,7 @@ STOCKBUYORNOT_ALIPAY_QR_URL: ""
 STOCKBUYORNOT_WECHATPAY_QR_URL: ""
 STOCKBUYORNOT_SUPPORT_CONTACT: "your-wechat-or-email"
 STOCKBUYORNOT_ADMIN_EMAILS: "sxtythmpf@163.com"
+STOCKBUYORNOT_SESSION_HOURS: "12"
 STOCKBUYORNOT_BILLING_ENFORCED: "true"
 ```
 
@@ -54,7 +55,7 @@ Then restart:
 sudo docker compose up -d
 ```
 
-The `./data` directory is mounted into the container, so `app.db` and each user's files persist across restarts.
+The `./data` directory is mounted into the container, so `app.db`, login sessions, usage counters, and each user's files persist across restarts. The default login session lifetime is 12 hours; adjust `STOCKBUYORNOT_SESSION_HOURS` if you want shorter or longer sessions.
 
 ### Payment QR Codes
 
@@ -108,6 +109,7 @@ After ICP and DNS are ready, add Nginx and HTTPS in front of Streamlit.
    - `STOCKBUYORNOT_WECHATPAY_QR_URL`: optional external WeChat Pay QR image URL
    - `STOCKBUYORNOT_PAYMENT_QR_URL`: optional generic QR image URL for backward compatibility
    - `STOCKBUYORNOT_SUPPORT_CONTACT`: your WeChat, email, or support contact
+   - `STOCKBUYORNOT_SESSION_HOURS`: login session lifetime in hours, default `12`
    - `STOCKBUYORNOT_BILLING_ENFORCED`: set to `true` when you want paid features locked
 5. Deploy the service.
 6. Add your custom domain in Render, then configure the DNS record at your domain provider.
@@ -122,7 +124,7 @@ streamlit run src/stockbuyornot/ui/streamlit_app.py --server.address=0.0.0.0 --s
 
 ## Production Notes
 
-- SQLite is acceptable for the first small MVP. Move to PostgreSQL before heavy traffic or multi-instance scaling.
+- SQLite is acceptable for the first small MVP with one app container and roughly 10-50 simultaneous users. Move to PostgreSQL before heavy traffic, multi-instance scaling, or sustained write contention.
 - Keep `STOCKBUYORNOT_BILLING_ENFORCED=false` while testing. Turn it on after your payment flow and support process are ready.
 - Do not commit `data/app.db` or `data/users/`; they contain user data.
 - Keep the investment risk disclaimer visible in the product and user agreement.

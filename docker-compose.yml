@@ -8,6 +8,7 @@ services:
     environment:
       STOCKBUYORNOT_DB_PATH: /app/data/app.db
       STOCKBUYORNOT_ADMIN_EMAILS: "sxtythmpf@163.com"
+      STOCKBUYORNOT_SESSION_HOURS: "12"
       STOCKBUYORNOT_BILLING_ENFORCED: "false"
       STOCKBUYORNOT_PAYMENT_AMOUNT_CNY: "99"
       STOCKBUYORNOT_PAYMENT_PROVIDER: manual_qr

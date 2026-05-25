@@ -16,6 +16,8 @@ services:
         value: /opt/render/project/src/data/app.db
       - key: STOCKBUYORNOT_ADMIN_EMAILS
         value: sxtythmpf@163.com
+      - key: STOCKBUYORNOT_SESSION_HOURS
+        value: "12"
       - key: STOCKBUYORNOT_BILLING_ENFORCED
         value: "false"
       - key: STOCKBUYORNOT_PAYMENT_AMOUNT_CNY
