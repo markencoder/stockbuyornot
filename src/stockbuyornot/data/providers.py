@@ -49,6 +49,7 @@ class AkshareProvider:
         self.request_retries = max(1, request_retries)
 
     def daily(self, symbol: str, start: str, end: str, adjust: str = "qfq") -> pd.DataFrame:
+        symbol = _normalize_symbol(symbol)
         try:
             return self._tencent_daily(symbol, start, end, adjust)
         except Exception:
@@ -74,6 +75,7 @@ class AkshareProvider:
         return normalize_ohlcv(raw, symbol=symbol)
 
     def intraday(self, symbol: str, period: str = "5", start: str = "", end: str = "", adjust: str = "") -> pd.DataFrame:
+        symbol = _normalize_symbol(symbol)
         period = str(period)
         if period not in {"1", "5", "15", "30", "60"}:
             raise ValueError("分时周期只支持 1、5、15、30、60 分钟。")
@@ -97,6 +99,12 @@ class AkshareProvider:
             return _normalize_intraday(raw, symbol=symbol)
         except Exception as exc:
             errors.append(f"hist_min_em: {exc}")
+
+        if period != "1":
+            try:
+                return self._eastmoney_intraday(symbol, period, start_time, end_time, adjust or "")
+            except Exception as exc:
+                errors.append(f"eastmoney_direct_minute: {exc}")
 
         try:
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
@@ -326,6 +334,7 @@ class AkshareProvider:
         raise RuntimeError("Unable to fetch board daily data. Last errors: " + " | ".join(errors[-3:]))
 
     def _eastmoney_daily(self, symbol: str, start: str, end: str, adjust: str) -> pd.DataFrame:
+        symbol = _normalize_symbol(symbol)
         fqt = {"": "0", "qfq": "1", "hfq": "2"}.get(adjust, "1")
         market = "1" if symbol.startswith(("6", "9")) else "0"
         params = {
@@ -340,6 +349,27 @@ class AkshareProvider:
         }
         response = self._request_eastmoney(params)
         return _parse_eastmoney_klines(response, symbol)
+
+    def _eastmoney_intraday(self, symbol: str, period: str, start_time: str, end_time: str, adjust: str) -> pd.DataFrame:
+        symbol = _normalize_symbol(symbol)
+        fqt = {"": "0", "qfq": "1", "hfq": "2"}.get(adjust, "0")
+        market = "1" if symbol.startswith(("6", "9")) else "0"
+        params = {
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "ut": "7eea3edcaed734bea9cbfc24409ed989",
+            "klt": str(period),
+            "fqt": fqt,
+            "secid": f"{market}.{symbol}",
+            "beg": "0",
+            "end": "20500000",
+        }
+        response = self._request_eastmoney(params)
+        data = _parse_eastmoney_intraday_klines(response, symbol)
+        start_ts = pd.to_datetime(start_time)
+        end_ts = pd.to_datetime(end_time)
+        data = data[(data["date"] >= start_ts) & (data["date"] <= end_ts)]
+        return data.reset_index(drop=True)
 
     def _eastmoney_index_daily(self, symbol: str, start: str, end: str) -> pd.DataFrame:
         market = "0" if symbol.startswith("399") else "1"
@@ -413,6 +443,29 @@ class AkshareProvider:
 
 
 def _parse_eastmoney_klines(response: Any, symbol: str) -> pd.DataFrame:
+    payload = response.json()
+    klines = (payload.get("data") or {}).get("klines") or []
+    rows = []
+    for item in klines:
+        fields = item.split(",")
+        if len(fields) < 7:
+            continue
+        rows.append(
+            {
+                "date": fields[0],
+                "open": fields[1],
+                "close": fields[2],
+                "high": fields[3],
+                "low": fields[4],
+                "volume": fields[5],
+                "amount": fields[6],
+                "symbol": symbol,
+            }
+        )
+    return normalize_ohlcv(pd.DataFrame(rows), symbol=symbol)
+
+
+def _parse_eastmoney_intraday_klines(response: Any, symbol: str) -> pd.DataFrame:
     payload = response.json()
     klines = (payload.get("data") or {}).get("klines") or []
     rows = []
@@ -529,14 +582,25 @@ def _extract_symbols(df: pd.DataFrame) -> list[str]:
     return deduped
 
 
+def _normalize_symbol(symbol: str) -> str:
+    text = str(symbol or "").strip().upper()
+    match = re.search(r"(\d{6})", text)
+    if match:
+        return match.group(1)
+    digits = re.sub(r"\D", "", text)
+    if 1 <= len(digits) <= 6:
+        return digits.zfill(6)
+    return text
+
+
 def _tencent_symbol(symbol: str) -> str:
-    symbol = str(symbol).zfill(6)
+    symbol = _normalize_symbol(symbol)
     prefix = "sh" if symbol.startswith(("6", "9")) else "sz"
     return f"{prefix}{symbol}"
 
 
 def _tencent_index_symbol(symbol: str) -> str:
-    symbol = str(symbol).zfill(6)
+    symbol = _normalize_symbol(symbol)
     if symbol.startswith("399"):
         return f"sz{symbol}"
     return f"sh{symbol}"
@@ -548,7 +612,7 @@ def _index_proxy_symbol(symbol: str) -> str:
         "000016": "510050",
         "000905": "510500",
         "399006": "159915",
-    }.get(str(symbol).zfill(6), "")
+    }.get(_normalize_symbol(symbol), "")
 
 
 def _date_with_dash(value: str) -> str:

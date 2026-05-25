@@ -1,6 +1,6 @@
 ﻿import pandas as pd
 
-from stockbuyornot.data.providers import AkshareProvider
+from stockbuyornot.data.providers import AkshareProvider, _normalize_symbol
 
 
 class FakeResponse:
@@ -49,3 +49,37 @@ def test_tencent_index_daily_uses_real_shenzhen_index_symbol():
 
     assert provider.requested_params[0].startswith("sz399001,day,")
     assert result["symbol"].iloc[-1] == "399001"
+
+
+def test_provider_normalize_symbol_accepts_market_suffixes():
+    assert _normalize_symbol("000001.SZ") == "000001"
+    assert _normalize_symbol("SH600519") == "600519"
+    assert _normalize_symbol("688008.0") == "688008"
+    assert _normalize_symbol(651) == "000651"
+
+
+def test_provider_daily_normalizes_symbol_before_request():
+    class DailyProvider(AkshareProvider):
+        def __init__(self):
+            super().__init__()
+            self.symbols = []
+
+        def _tencent_daily(self, symbol, start, end, adjust):
+            self.symbols.append(symbol)
+            return pd.DataFrame(
+                {
+                    "date": pd.date_range("2026-01-01", periods=2, freq="D"),
+                    "open": [1, 1],
+                    "high": [1, 1],
+                    "low": [1, 1],
+                    "close": [1, 1],
+                    "volume": [1, 1],
+                    "symbol": [symbol, symbol],
+                }
+            )
+
+    provider = DailyProvider()
+
+    provider.daily("SZ000001", "20260101", "20260102")
+
+    assert provider.symbols == ["000001"]
