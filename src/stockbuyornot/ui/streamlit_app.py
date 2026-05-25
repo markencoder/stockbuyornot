@@ -806,6 +806,7 @@ def enrich_follow_candidates_with_analysis(
     analyze_limit: int,
 ) -> pd.DataFrame:
     rows = []
+    benchmark = load_benchmark_for_ui(provider, settings)
     progress = st.progress(0.0)
     status = st.empty()
     scan_count = min(len(candidates), analyze_limit)
@@ -816,7 +817,7 @@ def enrich_follow_candidates_with_analysis(
             status.write(f"正在诊断A股量价 {index}/{scan_count}：{symbol}")
             try:
                 df = provider.daily(symbol, settings["start"], settings["end"], settings["adjust"])
-                result = analyze_ohlcv(df, symbol=symbol)
+                result = analyze_for_ui(df, symbol=symbol, benchmark=benchmark)
                 signals = "、".join(signal.name for signal in result.signals)
                 enriched.update(
                     {
@@ -3107,6 +3108,7 @@ def refresh_watchlist_records(settings: dict, provider: AkshareProvider) -> tupl
         return 0, []
 
     benchmark = load_benchmark_for_ui(provider, settings)
+    context_cache: dict[str, tuple[pd.DataFrame | None, float | None]] = {}
     refreshed_records: list[dict] = []
     failed_items: list[tuple[str, str]] = []
     progress = st.progress(0)
@@ -3126,7 +3128,16 @@ def refresh_watchlist_records(settings: dict, provider: AkshareProvider) -> tupl
             continue
         try:
             df = provider.daily(symbol, fetch_start, end, adjust)
-            result = analyze_for_ui(df, symbol=symbol, benchmark=benchmark)
+            sector_benchmark, sector_rs_rank = load_watchlist_record_sector_context(record, provider, settings, benchmark, context_cache)
+            sector_name = str((watchlist_record_analysis_context(record).get("sector_name") or "")).strip()
+            result = analyze_for_ui(
+                df,
+                symbol=symbol,
+                benchmark=benchmark,
+                sector=sector_benchmark,
+                sector_name=sector_name,
+                sector_rs_rank=sector_rs_rank,
+            )
             refreshed = merge_watchlist_refresh_record(record, result, now_text)
             refreshed_records.append(refreshed)
         except Exception as exc:
@@ -3140,6 +3151,41 @@ def refresh_watchlist_records(settings: dict, provider: AkshareProvider) -> tupl
     progress.empty()
     status.empty()
     return len(records) - len(failed_items), failed_items
+
+
+def watchlist_record_analysis_context(record: dict) -> dict:
+    context = dict(record.get("analysis_context") or {})
+    radar = record.get("radar") or {}
+    if not context.get("sector_name"):
+        for key in ["sector_name", "板块名称", "鏉垮潡鍚嶇О"]:
+            if radar.get(key):
+                context["sector_name"] = radar.get(key)
+                break
+    if context.get("sector_rs_rank") in [None, ""]:
+        for key in ["sector_rs_rank", "板块强度分位", "鏉垮潡寮哄害鍒嗕綅"]:
+            if radar.get(key) not in [None, ""]:
+                context["sector_rs_rank"] = radar.get(key)
+                break
+    return context
+
+
+def load_watchlist_record_sector_context(
+    record: dict,
+    provider: AkshareProvider,
+    settings: dict,
+    benchmark: pd.DataFrame | None,
+    cache: dict[str, tuple[pd.DataFrame | None, float | None]],
+) -> tuple[pd.DataFrame | None, float | None]:
+    context = watchlist_record_analysis_context(record)
+    sector_name = str(context.get("sector_name") or "").strip()
+    if not sector_name:
+        return None, None
+    if sector_name in cache:
+        return cache[sector_name]
+    sector = load_board_for_ui(provider, sector_name, settings)
+    sector_rank = sector_rank_hint(sector, benchmark)
+    cache[sector_name] = (sector, sector_rank)
+    return cache[sector_name]
 
 
 def merge_watchlist_refresh_record(old_record: dict, result: AnalysisResult, refreshed_at: str) -> dict:
@@ -3253,6 +3299,7 @@ def analysis_result_to_watchlist_record(result: AnalysisResult, source: str) -> 
     long_view = getattr(result, "long_term_view", None)
     short_view = getattr(result, "short_term_view", None)
     factor_scores = getattr(result, "factor_scores", None)
+    radar = getattr(result, "radar", None)
     candidate_score = scan_candidate_score(result)
     execution_score = None
     execution_flags: list[str] = []
@@ -3263,6 +3310,11 @@ def analysis_result_to_watchlist_record(result: AnalysisResult, source: str) -> 
         "source": source,
         "saved_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
         "candidate_score": candidate_score,
+        "analysis_context": {
+            "benchmark_symbol": "000300",
+            "sector_name": "" if radar is None else str(getattr(radar, "sector_name", "") or ""),
+            "sector_rs_rank": None if radar is None else getattr(radar, "sector_rs_rank", None),
+        },
         "operation_status": "unmarked",
         "status_updated_at": "",
         "manual_price": None,
@@ -3320,7 +3372,7 @@ def analysis_result_to_watchlist_record(result: AnalysisResult, source: str) -> 
             "explanation": result.score.explanation,
         },
         "signals": [signal_to_record(signal) for signal in result.signals],
-        "radar": radar_to_record(getattr(result, "radar", None)),
+        "radar": radar_to_record(radar),
         "support_levels": [level_to_record(level) for level in result.support_levels],
         "resistance_levels": [level_to_record(level) for level in result.resistance_levels],
     }

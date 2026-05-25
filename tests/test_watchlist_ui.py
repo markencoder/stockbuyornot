@@ -37,7 +37,9 @@ from stockbuyornot.ui.streamlit_app import (
     intraday_chart_points_from_df,
     intraday_confirmation_to_record,
     intraday_record_group,
+    load_watchlist_record_sector_context,
     watchlist_intraday_summary_row,
+    watchlist_record_analysis_context,
 )
 from stockbuyornot.intraday import IntradaySummary
 from stockbuyornot.models import Stage
@@ -485,6 +487,48 @@ def test_watchlist_refresh_preserves_manual_tracking_fields(monkeypatch):
     assert refreshed["operator_note"] == old_record["operator_note"]
     assert refreshed["last_refreshed_at"] == "2026-05-21 10:00:00"
     assert refreshed["refresh_error"] == ""
+
+
+def test_watchlist_analysis_context_uses_saved_sector_for_refresh(monkeypatch):
+    record = {"analysis_context": {"sector_name": "银行"}}
+    benchmark = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=60, freq="D"),
+            "close": [100 + index for index in range(60)],
+        }
+    )
+    sector = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=60, freq="D"),
+            "close": [100 + index * 2 for index in range(60)],
+        }
+    )
+    calls = []
+
+    def fake_load_board(provider, board_name, settings):
+        calls.append(board_name)
+        return sector
+
+    monkeypatch.setattr(app, "load_board_for_ui", fake_load_board)
+    cache = {}
+
+    loaded_sector, sector_rank = load_watchlist_record_sector_context(record, object(), {}, benchmark, cache)
+    loaded_again, sector_rank_again = load_watchlist_record_sector_context(record, object(), {}, benchmark, cache)
+
+    assert watchlist_record_analysis_context(record)["sector_name"] == "银行"
+    assert loaded_sector is sector
+    assert loaded_again is sector
+    assert sector_rank == sector_rank_again
+    assert calls == ["银行"]
+
+
+def test_watchlist_record_analysis_context_falls_back_to_radar_sector():
+    record = {"radar": {"板块名称": "人工智能", "板块强度分位": 0.7}}
+
+    context = watchlist_record_analysis_context(record)
+
+    assert context["sector_name"] == "人工智能"
+    assert context["sector_rs_rank"] == 0.7
 
 
 def test_watchlist_trade_plan_classifies_actionable_buy_candidate():
